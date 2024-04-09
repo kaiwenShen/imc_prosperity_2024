@@ -21,11 +21,13 @@ class Trader:
 
     def set_up_cached_trader_data(self, state, traderDataOld):
         # for now we just cache the orderDepth.
-        cache = state.order_depths.copy()
+        order_depth = state.order_depths['STARFRUIT']
+        # so far we cache the mid-price of BBO
+        cache = int(list(order_depth.sell_orders.keys())[0]) - int(list(order_depth.buy_orders.keys())[0])
         if state.timestamp == 0:
             return jsonpickle.encode([cache])
         new_cache = copy.deepcopy(traderDataOld + [cache])
-        return jsonpickle.encode(new_cache[-100:])
+        return jsonpickle.encode(new_cache[-501:])
 
     def update_estimated_position(self, estimated_position, product, amount, side):
         amount = side * abs(amount)
@@ -98,7 +100,6 @@ class Trader:
         return orders, ordered_position, estimated_traded_lob
 
     def kevin_residual_market_maker(self, acceptable_price, product, state, ordered_position, estimated_traded_lob):
-        print(f"Residual Market Maker ordered_position: {ordered_position}")
         orders: List[Order] = []
         existing_position = state.position[product] if product in state.position.keys() else 0
         buy_available_position = self.POSITION_LIMIT[product] - existing_position
@@ -114,20 +115,22 @@ class Trader:
         best_estimated_ask, best_estimated_ask_amount = list(estimated_traded_lob[product].sell_orders.items())[0]
         best_estimated_bid, best_estimated_ask = int(best_estimated_bid), int(best_estimated_ask)
         estimated_spread = best_estimated_ask - best_estimated_bid
-        limit_buy,limit_sell= 0,0
+        limit_buy,limit_sell = 0,0
         if estimated_spread > 0:
             # it's possible to make a market, without spread it will be market order
             if (best_estimated_ask_amount - 1 > acceptable_price > best_estimated_bid_amount + 1
                     and sell_available_position > 0 and buy_available_position > 0):
-                # we can provide liquidity on both side, but we only provide liquidity on the profit max side
-                if best_estimated_ask_amount * (
-                        best_estimated_ask - 1 - acceptable_price) > best_estimated_bid_amount * (
-                        acceptable_price - (best_estimated_bid + 1)):
-                    # we provide liquidity by posting selling limit order
-                    limit_sell = 1
-                else:
-                    # we provide liquidity by posting buying limit order
-                    limit_buy = 1
+                # We can provide liquidity on both side.
+                # But we only provide liquidity on the profit max side for simplification.
+                # if best_estimated_ask_amount * (
+                #         best_estimated_ask - 1 - acceptable_price) > best_estimated_bid_amount * (
+                #         acceptable_price - (best_estimated_bid + 1)):
+                #     # we provide liquidity by posting selling limit order
+                #     limit_sell = 1
+                # else:
+                #     # we provide liquidity by posting buying limit order
+                #     limit_buy = 1
+                limit_buy, limit_sell = 1, 1
             elif best_estimated_ask_amount - 1 > acceptable_price and sell_available_position > 0:
                 # we provide liquidity by posting selling limit order
                 limit_sell = 1
@@ -147,7 +150,9 @@ class Trader:
                 ordered_position = self.update_estimated_position(ordered_position, product,
                                                                   -sell_available_position, -1)
         return orders, ordered_position, estimated_traded_lob
+    def kevin_r1_starfruit_pred(self,traderDataOld)-> int:
 
+        pass
     def run(self, state: TradingState):
         # read in the previous cache
         traderDataOld = self.decode_trader_data(state)
@@ -168,7 +173,21 @@ class Trader:
                                                                                                     ordered_position,
                                                                                                     estimated_traded_lob)
                 result[product] = liquidity_take_order + mm_order
-            # String value holding Trader state data required.
+                print(f"MM order: {mm_order}")
+            if product == 'STARFRUIT':
+                if len(traderDataOld)>500:
+                    # we have enough data to make prediction
+                    predicted_price = self.kevin_r1_starfruit_pred(traderDataOld)
+                    print(f"Predicted price: {predicted_price}")
+                    liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_liquidity_take(
+                        predicted_price, product, state, ordered_position, estimated_traded_lob)
+                    # mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(predicted_price, product,
+                    #                                                                                     state,
+                    #                                                                                     ordered_position,
+                    #                                                                                     estimated_traded_lob)
+                    result[product] = liquidity_take_order
+            #     # we dont mm because there is risk of losing money
+            #     result[product] = liquidity_take_order
         print('post_trade_position: ' + str(ordered_position))
         # store the new cache
         traderDataNew = self.set_up_cached_trader_data(state, traderDataOld)
