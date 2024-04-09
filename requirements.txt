@@ -1,0 +1,8 @@
+pandas
+jupyter
+numpy
+plotly
+matplotlib
+scipy
+statistics
+jsonpickle
