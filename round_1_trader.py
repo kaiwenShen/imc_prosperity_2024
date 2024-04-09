@@ -47,6 +47,43 @@ class Trader:
                 orders.append(Order(product, best_bid, -best_bid_amount))
         return orders
 
+    def kevin_acceptable_price_liquidity_take(self, acceptable_price, product, state):
+        order_depth: OrderDepth = state.order_depths[product]
+        orders: List[Order] = []
+        existing_position = state.position[product] if product in state.position else 0
+        if len(order_depth.sell_orders) != 0:
+            best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
+            # print(f'best_ask: {best_ask}, best_ask_amount: {best_ask_amount}')
+            # print(f'existing position: {existing_position}')
+            if int(best_ask) < acceptable_price:
+                if existing_position + abs(best_ask_amount) > self.POSITION_LIMIT[product]:
+                    # adjust buy amount base on limit
+                    best_ask_amount = self.POSITION_LIMIT[product] - existing_position  # we max out the position
+                    # check if we can buy
+                if best_ask_amount == 0:
+                    pass
+                else:
+                    print("BUY", str(-best_ask_amount) + "x", best_ask)
+                    orders.append(Order(product, best_ask, abs(best_ask_amount)))
+        if len(order_depth.buy_orders) != 0:
+            best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
+            if int(best_bid) > acceptable_price:
+                # print(f'existing position: {existing_position}, best_bid_amount: {best_bid_amount}')
+                # print(f'position limit: {self.POSITION_LIMIT[product]}')
+                if existing_position - abs(best_bid_amount) < -self.POSITION_LIMIT[product]:
+                    # adjust sell amount base on limit
+                    best_bid_amount = existing_position + self.POSITION_LIMIT[product]
+                    # check if we can sell
+                if best_bid_amount == 0:
+                    pass
+                else:
+                    print("SELL", str(best_bid_amount) + "x", best_bid)
+                    orders.append(Order(product, best_bid, -abs(best_bid_amount)))
+        return orders
+
+    def kevin_market_maker(self, product, state):
+        pass
+
     def run(self, state: TradingState):
         # read in the previous cache
         traderDataOld = self.decode_trader_data(state)
@@ -58,7 +95,7 @@ class Trader:
         result = {}
         for product in state.order_depths:
             if product == 'AMETHYSTS':
-                result[product] = self.official_acceptable_price(10_000, product, state)
+                result[product] = self.kevin_acceptable_price_liquidity_take(10_000, product, state)
             # String value holding Trader state data required.
         # store the new cache
         traderDataNew = self.set_up_cached_trader_data(state, traderDataOld)
