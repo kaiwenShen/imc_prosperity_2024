@@ -199,27 +199,27 @@ class Trader:
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            # if product == 'AMETHYSTS':
-            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_liquidity_take(
-            #         10_000, product, state, ordered_position, estimated_traded_lob)
-            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-            #                                                                                         state,
-            #                                                                                         ordered_position,
-            #                                                                                         estimated_traded_lob)
-            #     result[product] = liquidity_take_order + mm_order
-            if product == 'STARFRUIT':
-                print(f"TraderDataOld length: {len(traderDataOld)}")
-                if len(traderDataOld) > 100:
-                    # we have enough data to make prediction
-                    predicted_price = self.kevin_r1_starfruit_pred(traderDataOld,state)
-                    print(f"Predicted price: {predicted_price}")
-                    liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_liquidity_take(
-                        predicted_price, product, state, ordered_position, estimated_traded_lob)
-                    # mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(predicted_price, product,
-                    #                                                                                     state,
-                    #                                                                                     ordered_position,
-                    #                                                                                     estimated_traded_lob)
-                    result[product] = liquidity_take_order
+            if product == 'AMETHYSTS':
+                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_liquidity_take(
+                    10_000, product, state, ordered_position, estimated_traded_lob)
+                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+                                                                                                    state,
+                                                                                                    ordered_position,
+                                                                                                    estimated_traded_lob)
+                result[product] = liquidity_take_order + mm_order
+            # if product == 'STARFRUIT':
+            #     print(f"TraderDataOld length: {len(traderDataOld)}")
+            #     if len(traderDataOld) > 100:
+            #         # we have enough data to make prediction
+            #         predicted_price = self.kevin_r1_starfruit_pred(traderDataOld,state)
+            #         print(f"Predicted price: {predicted_price}")
+            #         liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_liquidity_take(
+            #             predicted_price, product, state, ordered_position, estimated_traded_lob)
+            #         mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(predicted_price, product,
+            #                                                                                             state,
+            #                                                                                             ordered_position,
+            #                                                                                             estimated_traded_lob)
+            #         result[product] = liquidity_take_order
             #     # we dont mm because there is risk of losing money
         print('post_trade_position: ' + str(ordered_position))
         # store the new cache
