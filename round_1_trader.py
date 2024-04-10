@@ -55,8 +55,11 @@ class Trader:
                 orders.append(Order(product, best_bid, -best_bid_amount))
         return orders
 
-    def kevin_acceptable_price_liquidity_take(self, acceptable_price, product, state, ordered_position,
-                                              estimated_traded_lob):
+    def kevin_acceptable_price_BBO_liquidity_take(self, acceptable_price, product, state, ordered_position,
+                                                  estimated_traded_lob):
+        """
+        This function takes the best bid and best ask from the order depth and place a market order to take liquidity
+        """
         order_depth: OrderDepth = state.order_depths[product]
         orders: List[Order] = []
         existing_position = state.position[product] if product in state.position else 0
@@ -100,8 +103,54 @@ class Trader:
                                                                       -1)
         return orders, ordered_position, estimated_traded_lob
 
+    def kevin_acceptable_price_wtb_liquidity_take(self, acceptable_price, product, state, ordered_position,
+                                                  estimated_traded_lob, fraction_to_keep=0.15):
+        """ same as BBO function,but this function allows to walk the book to take liquidity"""
+        order_depth: OrderDepth = state.order_depths[product]
+        orders: List[Order] = []
+        existing_position = state.position[product] if product in state.position else 0
+        buy_available_position = np.round((self.POSITION_LIMIT[product] - existing_position) * (1 - fraction_to_keep))
+        sell_available_position = np.round((self.POSITION_LIMIT[product] + existing_position) * (1 - fraction_to_keep))
+        if ordered_position[product] > 0:
+            # we have long position previously,we need to deduct those from buy
+            buy_available_position = self.POSITION_LIMIT[product] - ordered_position[product]
+        elif ordered_position[product] < 0:
+            # we have short position previously, we need to deduct those from sell
+            sell_available_position = self.POSITION_LIMIT[product] + ordered_position[product]
+
+        for ask, ask_amount in order_depth.sell_orders.items():
+            ask_amount = abs(ask_amount)
+            if int(ask) < acceptable_price and buy_available_position > 0:
+                # price is good, we check the position limit
+                if ask_amount > buy_available_position:
+                    # we partially take liquidity
+                    ask_amount = buy_available_position
+                    estimated_traded_lob[product].sell_orders[ask] += ask_amount  # because lob the amount is negative
+                else:
+                    # we've eaten the ask
+                    estimated_traded_lob[product].sell_orders.pop(ask)
+                print("BUY", str(ask_amount) + "x", ask)
+                orders.append(Order(product, ask, abs(ask_amount)))
+                buy_available_position -= ask_amount
+                ordered_position = self.update_estimated_position(ordered_position, product, ask_amount, 1)
+        for bid, bid_amount in order_depth.buy_orders.items():
+            if int(bid) > acceptable_price and sell_available_position > 0:
+                # price is good, we check the position limit
+                if bid_amount > sell_available_position:
+                    # we adjust the amount to sell
+                    bid_amount = sell_available_position
+                    estimated_traded_lob[product].buy_orders[bid] -= bid_amount
+                else:
+                    # we've eaten the bid
+                    estimated_traded_lob[product].buy_orders.pop(bid)
+                print("SELL", str(bid_amount) + "x", bid)
+                orders.append(Order(product, bid, -abs(bid_amount)))
+                sell_available_position -= bid_amount
+                ordered_position = self.update_estimated_position(ordered_position, product, bid_amount, -1)
+        return orders, ordered_position, estimated_traded_lob
+
     def kevin_residual_market_maker(self, acceptable_price, product, state, ordered_position, estimated_traded_lob,
-                                    fraction=0.5):
+                                    ):
         orders: List[Order] = []
         existing_position = state.position[product] if product in state.position.keys() else 0
         buy_available_position = self.POSITION_LIMIT[product] - existing_position
@@ -112,8 +161,8 @@ class Trader:
         elif ordered_position[product] < 0:
             # we have short position previously, we need to deduct those from sell
             sell_available_position = self.POSITION_LIMIT[product] + ordered_position[product]
-        buy_available_position = int(buy_available_position * fraction)
-        sell_available_position = int(sell_available_position * fraction)
+        buy_available_position = int(buy_available_position)
+        sell_available_position = int(sell_available_position)
         best_estimated_bid, best_estimated_bid_amount = list(estimated_traded_lob[product].buy_orders.items())[0]
         best_estimated_ask, best_estimated_ask_amount = list(estimated_traded_lob[product].sell_orders.items())[0]
         best_estimated_bid, best_estimated_ask = int(best_estimated_bid), int(best_estimated_ask)
@@ -154,7 +203,7 @@ class Trader:
                                                                   -sell_available_position, -1)
         return orders, ordered_position, estimated_traded_lob
 
-    def kevin_r1_starfruit_pred(self, traderDataOld,state) -> int:
+    def kevin_r1_starfruit_pred(self, traderDataOld, state) -> int:
         period = 100
         weight = np.array([0.5] + [1] * (period - 1) + [0.5]) / period
         trend = np.convolve(traderDataOld, weight, mode='valid')
@@ -183,10 +232,10 @@ class Trader:
                     0.9999837850085336, 0.999998435219356, 0.999981602946158, 0.9999933269528802,
                     0.9999929813644886, 0.9999902581745486, 1.000005149521674, 1.000009887563873,
                     0.9999728692009592, 0.9999886729613285, 0.999997420954309, 1.000007092813771,
-                    1.0000093043515597,]
-        current_time= state.timestamp/100
-        seasonal = seasonal[int(current_time % 100)+1]
-        return trend*seasonal
+                    1.0000093043515597, ]
+        current_time = state.timestamp / 100
+        seasonal = seasonal[int(current_time % 100) + 1]
+        return trend * seasonal
 
     def run(self, state: TradingState):
         # read in the previous cache
@@ -200,7 +249,11 @@ class Trader:
         result = {}
         for product in state.order_depths.keys():
             if product == 'AMETHYSTS':
-                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_liquidity_take(
+                # orders that doesn't walk the book
+                # liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_BBO_liquidity_take(
+                #     10_000, product, state, ordered_position, estimated_traded_lob)
+                # orders that walk the book
+                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
                     10_000, product, state, ordered_position, estimated_traded_lob)
                 mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
                                                                                                     state,
@@ -220,7 +273,7 @@ class Trader:
             #                                                                                             ordered_position,
             #                                                                                             estimated_traded_lob)
             #         result[product] = liquidity_take_order
-            #     # we dont mm because there is risk of losing money
+            #     # we don't mm because there is risk of losing money
         print('post_trade_position: ' + str(ordered_position))
         # store the new cache
         traderDataNew = self.set_up_cached_trader_data(state, traderDataOld)
