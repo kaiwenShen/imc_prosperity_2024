@@ -31,7 +31,7 @@ class Trader:
         if state.timestamp == 0:
             return jsonpickle.encode([(cache_midprice, cache_imbalance)])
         new_cache = copy.deepcopy(traderDataOld + [(cache_midprice, cache_imbalance)])
-        return jsonpickle.encode(new_cache[-101:]) # take how many data, now is latest 100 data points.
+        return jsonpickle.encode(new_cache[-101:])  # take how many data, now is latest 100 data points.
 
     def update_estimated_position(self, estimated_position, product, amount, side):
         amount = side * abs(amount)
@@ -49,6 +49,14 @@ class Trader:
             # we have short position previously, we need to deduct those from sell
             sell_available_position += ordered_position[product]
         return buy_available_position, sell_available_position
+
+    def get_best_bid_ask(self, product, estimated_traded_lob):
+        order_depth = estimated_traded_lob[product]
+        buy_lob = [price for price in order_depth.buy_orders.keys() if order_depth.buy_orders[price] > 0]
+        sell_lob = [price for price in order_depth.sell_orders.keys() if order_depth.sell_orders[price] < 0]
+        best_bid = max(buy_lob) if buy_lob else 0
+        best_ask = min(sell_lob) if sell_lob else 0
+        return best_bid, order_depth.buy_orders[best_bid], best_ask, order_depth.sell_orders[best_ask]
 
     def official_acceptable_price(self, acceptable_price, product, state):
         order_depth: OrderDepth = state.order_depths[product]
@@ -75,7 +83,7 @@ class Trader:
         """
         This function takes the best bid and best ask from the order depth and place a market order to take liquidity
         """
-        order_depth: OrderDepth = state.order_depths[product]
+        order_depth: OrderDepth = copy.deepcopy(state.order_depths[product])
         orders: List[Order] = []
         existing_position = state.position[product] if product in state.position else 0
         if len(order_depth.sell_orders) != 0:
@@ -162,11 +170,8 @@ class Trader:
     def kevin_residual_market_maker(self, acceptable_price, product, state, ordered_position, estimated_traded_lob,
                                     ):
         orders: List[Order] = []
-
         buy_available_position, sell_available_position = self.cal_available_position(product, state, ordered_position)
-
-        best_estimated_bid = max(estimated_traded_lob[product].buy_orders.keys())
-        best_estimated_ask = min(estimated_traded_lob[product].sell_orders.keys())
+        best_estimated_bid, _, best_estimated_ask, _ = self.get_best_bid_ask(product, estimated_traded_lob)
         estimated_spread = best_estimated_ask - best_estimated_bid
         limit_buy, limit_sell = 0, 0
         if estimated_spread > 0:
@@ -184,15 +189,50 @@ class Trader:
             if limit_buy:
                 print("LIMIT BUY", str(buy_available_position) + "x", best_estimated_bid + 1)
                 orders.append(Order(product, best_estimated_bid + 1, buy_available_position))
-                estimated_traded_lob[product].buy_orders[str(best_estimated_bid + 1)] = buy_available_position
+                estimated_traded_lob[product].buy_orders[best_estimated_bid + 1] = buy_available_position
                 ordered_position = self.update_estimated_position(ordered_position, product, buy_available_position,
                                                                   1)
             if limit_sell:
                 print("LIMIT SELL", str(sell_available_position) + "x", best_estimated_ask - 1)
                 orders.append(Order(product, best_estimated_ask - 1, -sell_available_position))
-                estimated_traded_lob[product].sell_orders[str(best_estimated_ask - 1)] = -sell_available_position
+                estimated_traded_lob[product].sell_orders[best_estimated_ask - 1] = -sell_available_position
                 ordered_position = self.update_estimated_position(ordered_position, product,
                                                                   -sell_available_position, -1)
+        return orders, ordered_position, estimated_traded_lob
+
+    def kevin_cover_position(self, product, state, ordered_position, estimated_traded_lob):
+        orders: List[Order] = []
+        order_depth: OrderDepth = copy.deepcopy(state.order_depths[product])
+        existing_position = state.position[product] if product in state.position else 0
+        if existing_position > 0:
+            # we walk the book to sell
+            for bid, bid_amount in order_depth.buy_orders.items():
+                if existing_position != 0:
+                    if bid_amount > existing_position:
+                        bid_amount = existing_position
+                        estimated_traded_lob[product].buy_orders[bid] -= bid_amount
+                    else:
+                        estimated_traded_lob[product].buy_orders.pop(bid)
+                    print("Cover SELL", str(bid_amount) + "x", bid)
+                    orders.append(Order(product, bid, -bid_amount))
+                    ordered_position = self.update_estimated_position(ordered_position, product, bid_amount, -1)
+                    existing_position -= bid_amount
+        elif existing_position < 0:
+            # we walk the book to buy
+            existing_position = abs(existing_position)
+            for ask, ask_amount in order_depth.sell_orders.items():
+                ask_amount = abs(ask_amount)
+                if existing_position != 0:
+                    if ask_amount > existing_position:
+                        ask_amount = existing_position
+                        estimated_traded_lob[product].sell_orders[ask] += ask_amount
+                    else:
+                        estimated_traded_lob[product].sell_orders.pop(ask)
+                    print("COVER BUY", str(ask_amount) + "x", ask)
+                    orders.append(Order(product, ask, ask_amount))
+                    ordered_position = self.update_estimated_position(ordered_position, product, ask_amount, 1)
+                    existing_position -= ask_amount
+
         return orders, ordered_position, estimated_traded_lob
 
     def kevin_direction_hft(self, predicted_direction, product, state, ordered_position, estimated_traded_lob):
@@ -202,48 +242,49 @@ class Trader:
         if predict direction == 1 : we liquidity take the Best ask, and post a limit buy order at the best bid+1
         if predict direction == -1 : we liquidity take the Best bid, and post a limit sell order at the best ask-1
         """
-        assert predicted_direction == 1 or predicted_direction == -1
+        assert predicted_direction in [1, -1]
         orders: List[Order] = []
         buy_available_position, sell_available_position = self.cal_available_position(product, state, ordered_position)
-        order_depth: OrderDepth = state.order_depths[product]
-        best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
-        best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
+        order_depth: OrderDepth = copy.deepcopy(state.order_depths[product])
+        best_bid, best_bid_amount, best_ask, best_ask_amount = self.get_best_bid_ask(product, estimated_traded_lob)
         best_ask_amount = abs(best_ask_amount)
         if predicted_direction == 1:
             # we predict the price will go up
             if buy_available_position > 0:
-                # we only buy the best ask
-                if best_ask_amount > buy_available_position:
-                    best_ask_amount = buy_available_position
-                    estimated_traded_lob[product].sell_orders[best_ask] += best_ask_amount
-                else:
-                    # we take the whole best ask
-                    estimated_traded_lob[product].sell_orders.pop(best_ask)
-                print("BUY", str(best_ask_amount) + "x", best_ask)
-                orders.append(Order(product, best_ask, best_ask_amount))
-                buy_available_position -= best_ask_amount
-                if buy_available_position > 0:
-                    # we provide liquidity. note that we must have take the whole best ask so there is definitely a spread
-                    print("LIMIT BUY", str(buy_available_position) + "x", best_bid + 1)
-                    orders.append(Order(product, best_bid + 1, buy_available_position))
+                # # we only buy the best ask if the best ask is within 2 of mid-price
+                # if best_ask <=np.floor_divide(best_bid+best_ask,2)+1:
+                #     if best_ask_amount > buy_available_position:
+                #         best_ask_amount = buy_available_position
+                #         estimated_traded_lob[product].sell_orders[best_ask] += best_ask_amount
+                #     else:
+                #         # we take the whole best ask
+                #         estimated_traded_lob[product].sell_orders.pop(best_ask)
+                #     print("BUY", str(best_ask_amount) + "x", best_ask)
+                #     orders.append(Order(product, best_ask, best_ask_amount))
+                #     buy_available_position -= best_ask_amount
+                # if buy_available_position > 0:
+                print("LIMIT BUY", str(buy_available_position) + "x", best_bid + 1)
+                orders.append(Order(product, best_bid + 1, buy_available_position))
+
         else:
             # we predict the price will go down
-            best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
             if sell_available_position > 0:
-                # we only sell the best bid
-                if best_bid_amount > sell_available_position:
-                    best_bid_amount = sell_available_position
-                    estimated_traded_lob[product].buy_orders[best_bid] -= best_bid_amount
-                else:
-                    # we take the whole best bid
-                    estimated_traded_lob[product].buy_orders.pop(best_bid)
-                print("SELL", str(best_bid_amount) + "x", best_bid)
-                orders.append(Order(product, best_bid, -best_bid_amount))
-                sell_available_position -= best_bid_amount
-                if sell_available_position > 0:
-                    # we provide liquidity by selling
-                    print("LIMIT SELL", str(sell_available_position) + "x", best_ask - 1)
-                    orders.append(Order(product, best_ask - 1, -sell_available_position))
+                # if best_bid >= np.floor_divide(best_bid+best_ask,2)-1:
+                #     # we only sell the best bid
+                #     if best_bid_amount > sell_available_position:
+                #         best_bid_amount = sell_available_position
+                #         estimated_traded_lob[product].buy_orders[best_bid] -= best_bid_amount
+                #     else:
+                #         # we take the whole best bid
+                #         estimated_traded_lob[product].buy_orders.pop(best_bid)
+                #     print("SELL", str(best_bid_amount) + "x", best_bid)
+                #     orders.append(Order(product, best_bid, -best_bid_amount))
+                #     sell_available_position -= best_bid_amount
+                # if sell_available_position > 0:
+                #     # we provide liquidity by selling
+                print("LIMIT SELL", str(sell_available_position) + "x", best_ask - 1)
+                orders.append(Order(product, best_ask - 1, -sell_available_position))
+
         return orders, ordered_position, estimated_traded_lob
 
     def kevin_r1_starfruit_pred(self, traderDataOld, state) -> int:
@@ -253,47 +294,82 @@ class Trader:
         :param state: you may also need t=0 data
         :return: an int of either 1,0,or -1
         """
-        return np.random.choice([-1, 0, 1])
+        # notice the price parameters are negative, showing reverting
+        coef_fit = [1.14536629]
+        intercept = 0.02429364
+
+        # coef_fit = [-0.02839707, -0.05048245, -0.10501895, -0.17026582, -0.26236442, -0.37601569, -0.4910231, -0.52319539]
+        # intercept = 0.00289805
+
+        # coef_fit = [-0.0219555, -0.03439007, -0.08034013, -0.13276112, -0.2097877, -0.29943137, -0.38010792, -0.35622213, 0.78259484]
+        # intercept = 0.01801344
+        current_best_bid_volume = state.order_depths['STARFRUIT'].buy_orders[
+            list(state.order_depths['STARFRUIT'].buy_orders.keys())[0]]
+        current_best_ask_volume = np.abs(
+            state.order_depths['STARFRUIT'].sell_orders[list(state.order_depths['STARFRUIT'].sell_orders.keys())[0]])
+        current_s1_imbalance = (current_best_bid_volume - current_best_ask_volume) / (
+                current_best_bid_volume + current_best_ask_volume)
+        z = intercept
+        z += current_s1_imbalance * coef_fit[0]
+        # for i, val in enumerate(traderDataOld[-8:]):
+        #     z += val[0] * coef_fit[i]
+        # z += traderDataOld[-1][1] * coef_fit[-1]
+        calculated_prob = 1 / (1 + np.exp(-z))
+        threshold = 0.2
+        if calculated_prob > 0.5 + threshold:
+            return 1
+        elif calculated_prob < 0.5 - threshold:
+            return -1
+        else:
+            return 0
 
     def run(self, state: TradingState):
         # read in the previous cache
         traderDataOld = self.decode_trader_data(state)
-        print(state.position)
+        print(f"position now:{state.position}")
         ordered_position = {product: 0 for product in products}
         estimated_traded_lob = copy.deepcopy(state.order_depths)
         print("Observations: " + str(state.observations))
         print('pre_trade_position: ' + str(state.position))
-        print('lob : ' + str(state.order_depths['AMETHYSTS']))
+        print('lob starfruit sell: ' + str(state.order_depths['STARFRUIT'].sell_orders))
+        print('lob starfruit buy: ' + str(state.order_depths['STARFRUIT'].buy_orders))
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            if product == 'AMETHYSTS':
-                # orders that doesn't walk the book
-                # liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_BBO_liquidity_take(
-                #     10_000, product, state, ordered_position, estimated_traded_lob)
-                # result[product] = liquidity_take_order
-                # orders that walk the book
-                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
-                    10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
-                # result[product] = liquidity_take_order
-                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-                                                                                                    state,
-                                                                                                    ordered_position,
-                                                                                                    estimated_traded_lob)
-                result[product] = liquidity_take_order + mm_order
-            # if product == 'STARFRUIT':
-            #     print(f"TraderDataOld length: {len(traderDataOld)}")
-            #     if len(traderDataOld) > 100:
-            #         # we have enough data to make prediction
-            #         predicted_direction = self.kevin_r1_starfruit_pred(traderDataOld, state)
-            #         print(f"Predicted direction: {predicted_direction}")
-            #         if predicted_direction != 0:
-            #             orders, ordered_position, estimated_traded_lob = self.kevin_direction_hft(predicted_direction,
-            #                                                                                       product, state,
-            #                                                                                       ordered_position,
-            #                                                                                       estimated_traded_lob)
-            #             result[product] = orders
+            # if product == 'AMETHYSTS':
+            # # orders that doesn't walk the book
+            # # liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_BBO_liquidity_take(
+            # #     10_000, product, state, ordered_position, estimated_traded_lob)
+            # # result[product] = liquidity_take_order
+            # # orders that walk the book
+            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
+            #         10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
+            #     # result[product] = liquidity_take_order
+            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+            #                                                                                         state,
+            #                                                                                         ordered_position,
+            #                                                                                         estimated_traded_lob)
+            #     result[product] = liquidity_take_order + mm_order
+            if product == 'STARFRUIT':
+                #     # if len(traderDataOld) > 100:
+                #     # we have enough data to make prediction
+                predicted_direction = self.kevin_r1_starfruit_pred(traderDataOld, state)
+                print(f"Predicted direction: {predicted_direction}")
+                # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
+                #                                                                                  ordered_position,
+                #                                                                                  estimated_traded_lob)
+                cover_orders = []
+                if predicted_direction != 0:
+                    hft_orders, ordered_position, estimated_traded_lob = self.kevin_direction_hft(predicted_direction,
+                                                                                                  product, state,
+                                                                                                  ordered_position,
+                                                                                                  estimated_traded_lob)
+                else:
+                    hft_orders = []
+                result[product] = cover_orders + hft_orders
+
         print('post_trade_position: ' + str(ordered_position))
+        print(f'{result["STARFRUIT"] if "STARFRUIT" in result.keys() else 'NOT RECEIVED'}')
         # store the new cache
         traderDataNew = self.set_up_cached_trader_data(state, traderDataOld)
         conversions = 1

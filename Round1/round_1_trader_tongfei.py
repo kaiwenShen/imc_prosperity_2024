@@ -229,7 +229,6 @@ class Trader:
         order_depth: OrderDepth = state.order_depths[product]
         best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
         best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
-        best_ask, best_bid = int(best_ask), int(best_bid)
         best_ask_amount = abs(best_ask_amount)
         if predicted_direction == 1:
             # we predict the price will go up
@@ -284,8 +283,11 @@ class Trader:
 
         # coef_fit = [-0.0219555, -0.03439007, -0.08034013, -0.13276112, -0.2097877, -0.29943137, -0.38010792, -0.35622213, 0.78259484]
         # intercept = 0.01801344
+        current_best_bid_volume = state.order_depths['STARFRUIT'].buy_orders[list(state.order_depths['STARFRUIT'].buy_orders.keys())[0]]
+        current_best_ask_volume = np.abs(state.order_depths['STARFRUIT'].sell_orders[list(state.order_depths['STARFRUIT'].sell_orders.keys())[0]])
+        current_s1_imbalance = (current_best_bid_volume - current_best_ask_volume) / (current_best_bid_volume + current_best_ask_volume)
         z = intercept
-        z += traderDataOld[-1][1] * coef_fit[0]
+        z += current_s1_imbalance * coef_fit[0]
 
         # for i, val in enumerate(traderDataOld[-8:]):
         #     z += val[0] * coef_fit[i]
