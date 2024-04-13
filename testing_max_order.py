@@ -10,20 +10,21 @@ class Trader:
         print("Observations: " + str(state.observations))
         print("Order depths: " + str(state.order_depths))
         print("Position: " + str(state.position))
+
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths:
             order_depth: OrderDepth = state.order_depths[product]
             orders: List[Order] = []
-
+            best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
+            best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
             if product == 'AMETHYSTS':
-                if state.timestamp==0:
-                    orders.append(Order(product, 1010, 20))
-                    orders.append(Order(product, 10, 20))
+                if product not in state.position.keys() or state.position[product] !=5:
+                    orders.append(Order(product, best_ask, max(5,best_ask_amount)))
+                else:
+                    orders.append(Order(product, best_bid, -5))
+                    orders.append(Order(product, best_ask, 10))
 
-                if state.timestamp==1:
-                    orders.append(Order(product, 1010, 5))
-                    orders.append(Order(product, 909, -15))
             result[product] = orders
 
             # String value holding Trader state data required.
