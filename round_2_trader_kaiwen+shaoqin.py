@@ -513,7 +513,7 @@ class Trader:
                     ordered_position,
                     estimated_traded_lob,
                     traderDataNew,
-                    max_limit=50
+                    max_limit=65
                 )
 
                 result[product] = arb_orders
