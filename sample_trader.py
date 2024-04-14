@@ -25,7 +25,7 @@ class Trader:
         #     conversions = -state.position['ORCHIDS']
         # else:
         #     conversions = 0
-        if 'ORCHIDS' in state.own_trades.keys():
-            print(state.own_trades['ORCHIDS'])
+        print(f'market trade on Orchids: {state.market_trades["ORCHIDS"] if "ORCHIDS" in state.market_trades.keys() else None}')
+        print(f'own trades on Orchids: {state.own_trades["ORCHIDS"] if "ORCHIDS" in state.own_trades.keys() else None}')
         conversions=-1
         return result, conversions, traderData

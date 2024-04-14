@@ -379,7 +379,9 @@ class Trader:
             if liquidity_provide_price is not None:
                 for trade in trade_list:
                     if trade.price == liquidity_provide_price and (
-                            trade.buyer == 'SUMBISSION' or trade.seller == 'SUMBISSION'):
+                            trade.buyer == 'SUBMISSION' or trade.seller == 'SUBMISSION'):
+                        # we found the trade
+                        print(f"trade found: {trade}")
                         side = np.sign(liquidity_provide_amount)
                         if side == 1:
                             # we bought these amount, we need to sell them at foreign exchange
@@ -397,10 +399,11 @@ class Trader:
         # calculate available position to use
         buy_available_position = min(buy_available_position, max_limit)
         sell_available_position = min(sell_available_position, max_limit)
-        # check if there is arb opportunity for sell orderbook
+        # Market take the pure arb opportunity
         # flow: we buy at local, sell at foreign
         for ask, ask_amount in order_depth.sell_orders.items():
-            print(f"ask: {ask}, foreign_exchange_bid: {foreign_exchange_bid}, arb condition: {ask < foreign_exchange_bid}")
+            print(
+                f"ask: {ask}, foreign_exchange_bid: {foreign_exchange_bid}, arb condition: {ask < foreign_exchange_bid}")
             if ask < foreign_exchange_bid:
                 # we can buy at local, sell at foreign
                 if buy_available_position > 0:
@@ -414,7 +417,8 @@ class Trader:
         # check if there is arb opportunity for buy orderbook
         # flow: we sell at local, buy at foreign
         for bid, bid_amount in order_depth.buy_orders.items():
-            print(f"bid: {bid}, foreign_exchange_ask: {foreign_exchange_ask}, arb condition: {bid > foreign_exchange_ask}")
+            print(
+                f"bid: {bid}, foreign_exchange_ask: {foreign_exchange_ask}, arb condition: {bid > foreign_exchange_ask}")
             if bid > foreign_exchange_ask:
                 # we can sell at local, buy at foreign
                 if sell_available_position > 0:
@@ -425,6 +429,38 @@ class Trader:
                         estimated_traded_lob)
                     orders += order
                     conversions_cache += -order[0].quantity  # we want to do the opposite at foreign exchange
+
+        # One side liquidity provide arb
+        best_bid, best_bid_amount, best_ask, best_ask_amount = self.get_best_bid_ask(product, estimated_traded_lob)
+        liquidity_provide_sell, liquidity_provide_buy = False, False
+        sell_profit = best_ask-1-foreign_exchange_bid
+        buy_profit = foreign_exchange_ask-best_bid-1
+        if sell_profit > 0 and sell_available_position > 0:
+            # we can sell at local, buy at foreign
+            liquidity_provide_sell = True
+        if buy_profit > 0 and buy_available_position > 0:
+            # we can buy at local, sell at foreign
+            liquidity_provide_buy = True
+        if liquidity_provide_sell and liquidity_provide_buy:
+            if sell_profit > buy_profit:
+                liquidity_provide_buy = False
+            else:
+                liquidity_provide_sell = False
+
+        if liquidity_provide_sell:
+            print(f"LIMIT SELL, {sell_available_position}x, {best_ask-1}")
+            orders.append(Order(product, best_ask-1, -sell_available_position))
+            traderDataNew[-1][product][1] = best_ask-1
+            traderDataNew[-1][product][2] = -sell_available_position
+            ordered_position = self.update_estimated_position(ordered_position, product, -sell_available_position, -1)
+            estimated_traded_lob[product].sell_orders[best_ask-1] = -sell_available_position
+        if liquidity_provide_buy:
+            print(f"LIMIT BUY, {buy_available_position}x, {best_bid+1}")
+            orders.append(Order(product, best_bid+1, buy_available_position))
+            traderDataNew[-1][product][1] = best_bid+1
+            traderDataNew[-1][product][2] = buy_available_position
+            ordered_position = self.update_estimated_position(ordered_position, product, buy_available_position, 1)
+            estimated_traded_lob[product].buy_orders[best_bid+1] = buy_available_position
 
         traderDataNew[-1][product][0] = conversions_cache
         print(f"cached conversions: {conversions_cache}")
@@ -440,7 +476,8 @@ class Trader:
         estimated_traded_lob = copy.deepcopy(state.order_depths)
         print("Observations: " + str(state.observations))
         print('pre_trade_position: ' + str(state.position))
-        print('orchids_order_depth: ' + str(state.order_depths['ORCHIDS'].sell_orders)+str(state.order_depths['ORCHIDS'].buy_orders))
+        print('orchids_order_depth: ' + str(state.order_depths['ORCHIDS'].sell_orders) + str(
+            state.order_depths['ORCHIDS'].buy_orders))
 
         # Orders to be placed on exchange matching engine
         result = {}
@@ -471,12 +508,15 @@ class Trader:
             #                                                                                   acceptable_range=2)
             #         result[product] = cover_orders + hft_orders
             if product == 'ORCHIDS':
-                conversions, orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
+                conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
                     product, state,
                     ordered_position,
                     estimated_traded_lob,
-                    traderDataNew)
-                result[product] = orders
+                    traderDataNew,
+                    max_limit=50
+                )
+
+                result[product] = arb_orders
                 print(f"conversions at this time slice: {conversions}")
         # conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
