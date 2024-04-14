@@ -49,11 +49,21 @@ class Trader:
                 best_val = ask
         return best_val, tot_vol
 
-    def cal_order_majority_mid_price_vol(self, state, product):
+    def cal_standford_mid_price_vol(self, state, product):
         buy_price, buy_vol = self.stanford_values_extract(state.order_depths[product].buy_orders, 1)
         sell_price, sell_vol = self.stanford_values_extract(state.order_depths[product].sell_orders, -1)
         print('cached_number', (buy_price + sell_price) / 2)
         return (buy_price + sell_price) / 2, buy_vol + sell_vol
+
+    @staticmethod
+    def get_conversion_obs(state, product):
+        conversion_data = state.observations.conversionObservations[product]
+        sunlight = conversion_data.sunlight
+        humidity = conversion_data.humidity
+        importTariff = conversion_data.importTariff
+        exportTariff = conversion_data.exportTariff
+        transportFees = conversion_data.transportFees
+        return sunlight, humidity, importTariff, exportTariff, transportFees
 
     @staticmethod
     def calculate_imbalance(state, product):
@@ -80,15 +90,17 @@ class Trader:
     def set_up_cached_trader_data(self, state, traderDataOld):
         # for now we just cache the orderDepth.
         star_midprice = self.calculate_mid_price(state, 'STARFRUIT')
-        star_majority_midprice, star_majority_vol = self.cal_order_majority_mid_price_vol(state, 'STARFRUIT')
+        star_standford_midprice, star_majority_vol = self.cal_standford_mid_price_vol(state, 'STARFRUIT')
         star_imbalance = self.calculate_imbalance(state, 'STARFRUIT')
         orc_midprice = self.calculate_mid_price(state, 'ORCHIDS')
-        orc_majority_midprice, orc_majority_vol = self.cal_order_majority_mid_price_vol(state, 'ORCHIDS')
+        orc_standford_midprice, orc_majority_vol = self.cal_standford_mid_price_vol(state, 'ORCHIDS')
         orc_imbalance = self.calculate_imbalance(state, 'ORCHIDS')
+        sunlight, humidity, importTariff, exportTariff, transportFees = self.get_conversion_obs(state, 'ORCHIDS')
+
         # cache formulation
-        current_cache = [{'STARFRUIT': [star_midprice, star_majority_midprice, star_majority_vol, star_imbalance],
-                          'ORCHIDS': [None, None, None, orc_midprice, orc_majority_midprice, orc_majority_vol,
-                                      orc_imbalance]}]
+        current_cache = [{'STARFRUIT': [star_midprice, star_standford_midprice, star_majority_vol, star_imbalance],
+                          'ORCHIDS': [None, None, None, sunlight, humidity, importTariff, exportTariff, transportFees,
+                                      orc_midprice, orc_standford_midprice, orc_majority_vol, orc_imbalance]}]
         # for ORCHIDS, the first three elements are for conversion_cache, liquidity provide price, liquidity provide amount
         if state.timestamp == 0:
             return current_cache
@@ -101,7 +113,7 @@ class Trader:
         buy_available_position = self.POSITION_LIMIT[product] - existing_position
         sell_available_position = self.POSITION_LIMIT[product] + existing_position
         if ordered_position[product] > 0:
-            # we have long position previously,we need to deduct those from buy
+            # we had a long position previously,we need to deduct those from buy
             buy_available_position -= ordered_position[product]
         elif ordered_position[product] < 0:
             # we have short position previously, we need to deduct those from sell
@@ -413,6 +425,7 @@ class Trader:
                         ordered_position,
                         estimated_traded_lob)
                     orders += order
+                    ordered_position = self.update_estimated_position(ordered_position, product, 1, 1)
                     conversions_cache += -order[0].quantity  # we want to do the opposite at foreign exchange
         # check if there is arb opportunity for buy orderbook
         # flow: we sell at local, buy at foreign
@@ -428,13 +441,14 @@ class Trader:
                         ordered_position,
                         estimated_traded_lob)
                     orders += order
+                    ordered_position = self.update_estimated_position(ordered_position, product, 1, -1)
                     conversions_cache += -order[0].quantity  # we want to do the opposite at foreign exchange
 
         # One side liquidity provide arb
         best_bid, best_bid_amount, best_ask, best_ask_amount = self.get_best_bid_ask(product, estimated_traded_lob)
         liquidity_provide_sell, liquidity_provide_buy = False, False
-        sell_profit = best_ask-1-foreign_exchange_bid
-        buy_profit = foreign_exchange_ask-best_bid-1
+        sell_profit = best_ask - 1 - foreign_exchange_bid
+        buy_profit = foreign_exchange_ask - best_bid - 1
         if sell_profit > 0 and sell_available_position > 0:
             # we can sell at local, buy at foreign
             liquidity_provide_sell = True
@@ -448,19 +462,19 @@ class Trader:
                 liquidity_provide_sell = False
 
         if liquidity_provide_sell:
-            print(f"LIMIT SELL, {sell_available_position}x, {best_ask-1}")
-            orders.append(Order(product, best_ask-1, -sell_available_position))
-            traderDataNew[-1][product][1] = best_ask-1
+            print(f"LIMIT SELL, {sell_available_position}x, {best_ask - 1}")
+            orders.append(Order(product, best_ask - 1, -sell_available_position))
+            traderDataNew[-1][product][1] = best_ask - 1
             traderDataNew[-1][product][2] = -sell_available_position
             ordered_position = self.update_estimated_position(ordered_position, product, -sell_available_position, -1)
-            estimated_traded_lob[product].sell_orders[best_ask-1] = -sell_available_position
+            estimated_traded_lob[product].sell_orders[best_ask - 1] = -sell_available_position
         if liquidity_provide_buy:
-            print(f"LIMIT BUY, {buy_available_position}x, {best_bid+1}")
-            orders.append(Order(product, best_bid+1, buy_available_position))
-            traderDataNew[-1][product][1] = best_bid+1
+            print(f"LIMIT BUY, {buy_available_position}x, {best_bid + 1}")
+            orders.append(Order(product, best_bid + 1, buy_available_position))
+            traderDataNew[-1][product][1] = best_bid + 1
             traderDataNew[-1][product][2] = buy_available_position
             ordered_position = self.update_estimated_position(ordered_position, product, buy_available_position, 1)
-            estimated_traded_lob[product].buy_orders[best_bid+1] = buy_available_position
+            estimated_traded_lob[product].buy_orders[best_bid + 1] = buy_available_position
 
         traderDataNew[-1][product][0] = conversions_cache
         print(f"cached conversions: {conversions_cache}")
