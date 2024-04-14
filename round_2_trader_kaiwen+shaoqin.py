@@ -135,54 +135,6 @@ class Trader:
             available_amount -= amount
             return [Order(product, price, -amount)], available_amount, estimated_traded_lob, ordered_position
 
-    def kevin_acceptable_price_BBO_liquidity_take(self, acceptable_price, product, state, ordered_position,
-                                                  estimated_traded_lob):
-        """
-        This function takes the best bid and best ask from the order depth and place a market order to take liquidity
-        """
-        order_depth: OrderDepth = copy.deepcopy(state.order_depths[product])
-        orders: List[Order] = []
-        existing_position = state.position[product] if product in state.position else 0
-        if len(order_depth.sell_orders) != 0:
-            best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
-            if int(best_ask) < acceptable_price:
-                # we buy the product
-                if existing_position + abs(best_ask_amount) > self.POSITION_LIMIT[product]:
-                    # adjust buy amount base on limit
-                    best_ask_amount = self.POSITION_LIMIT[product] - existing_position  # we max out the position
-                else:
-                    # we've eaten the best ask
-                    estimated_traded_lob[product].sell_orders.pop(best_ask)
-                    pass
-                if best_ask_amount == 0:
-                    # we maxed out our position limit
-                    pass
-                else:
-                    print("BUY", str(-best_ask_amount) + "x", best_ask)
-                    orders.append(Order(product, best_ask, abs(best_ask_amount)))
-                    ordered_position = self.update_estimated_position(ordered_position, product, best_ask_amount, 1)
-        if len(order_depth.buy_orders) != 0:
-            best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
-            if int(best_bid) > acceptable_price:
-                # we sell the product
-                # print(f'existing position: {existing_position}, best_bid_amount: {best_bid_amount}')
-                # print(f'position limit: {self.POSITION_LIMIT[product]}')
-                if existing_position - abs(best_bid_amount) < -self.POSITION_LIMIT[product]:
-                    # adjust sell amount base on limit
-                    best_bid_amount = existing_position + self.POSITION_LIMIT[product]
-                else:
-                    # we've eaten the best bid
-                    estimated_traded_lob[product].buy_orders.pop(best_bid)
-                    pass
-                if best_bid_amount == 0:
-                    pass
-                else:
-                    print("SELL", str(best_bid_amount) + "x", best_bid)
-                    orders.append(Order(product, best_bid, -abs(best_bid_amount)))
-                    ordered_position = self.update_estimated_position(ordered_position, product, best_bid_amount,
-                                                                      -1)
-        return orders, ordered_position, estimated_traded_lob
-
     def kevin_acceptable_price_wtb_liquidity_take(self, acceptable_price, product, state, ordered_position,
                                                   estimated_traded_lob, limit_to_keep: int = 1):
         """ same as BBO function,but this function allows to walk the book to take liquidity"""
@@ -412,36 +364,31 @@ class Trader:
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            # if product == 'AMETHYSTS':
-            # # orders that doesn't walk the book
-            # # liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_BBO_liquidity_take(
-            # #     10_000, product, state, ordered_position, estimated_traded_lob)
-            # # result[product] = liquidity_take_order
-            # # orders that walk the book
-            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
-            #         10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
-            #     # result[product] = liquidity_take_order
-            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-            #                                                                                         state,
-            #                                                                                         ordered_position,
-            #                                                                                         estimated_traded_lob)
-            #     result[product] = liquidity_take_order + mm_order
-            if product == 'STARFRUIT':
-                if len(traderDataNew) == NUM_OF_DATA_POINT:
-                    # we have enough data to make prediction
-                    predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
-                    print(f"Predicted price: {predicted_price}")
-                    # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
-                    #                                                                                  ordered_position,
-                    #                                                                                  estimated_traded_lob)
-                    print('lob starfruit sell: ' + str(state.order_depths['STARFRUIT'].sell_orders))
-                    print('lob starfruit buy: ' + str(state.order_depths['STARFRUIT'].buy_orders))
-                    cover_orders = []
-                    hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
-                                                                                              product, state,
-                                                                                              ordered_position,
-                                                                                              estimated_traded_lob)
-                    result[product] = cover_orders + hft_orders
+            if product == 'AMETHYSTS':
+                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
+                    10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
+                # result[product] = liquidity_take_order
+                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+                                                                                                    state,
+                                                                                                    ordered_position,
+                                                                                                    estimated_traded_lob)
+                result[product] = liquidity_take_order + mm_order
+            # if product == 'STARFRUIT':
+            #     if len(traderDataNew) == NUM_OF_DATA_POINT:
+            #         # we have enough data to make prediction
+            #         predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
+            #         print(f"Predicted price: {predicted_price}")
+            #         # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
+            #         #                                                                                  ordered_position,
+            #         #                                                                                  estimated_traded_lob)
+            #         print('lob starfruit sell: ' + str(state.order_depths['STARFRUIT'].sell_orders))
+            #         print('lob starfruit buy: ' + str(state.order_depths['STARFRUIT'].buy_orders))
+            #         cover_orders = []
+            #         hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
+            #                                                                                   product, state,
+            #                                                                                   ordered_position,
+            #                                                                                   estimated_traded_lob)
+            #         result[product] = cover_orders + hft_orders
 
         conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)

@@ -25,5 +25,5 @@ class Trader:
         #     conversions = -state.position['ORCHIDS']
         # else:
         #     conversions = 0
-        conversions = best_ask_amount
+        conversions=-1
         return result, conversions, traderData
