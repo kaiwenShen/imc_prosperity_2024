@@ -123,6 +123,7 @@ class Trader:
                 cpos += order_for
                 assert (order_for >= 0)
                 orders.append(Order(product, ask, order_for))
+                print("BUY", str(order_for) + "x", ask)
 
         undercut_buy = best_buy_pr + 1
         undercut_sell = best_sell_pr - 1
@@ -133,6 +134,7 @@ class Trader:
         if cpos < LIMIT:
             num = LIMIT - cpos
             orders.append(Order(product, bid_pr, num))
+            print("LIMIT BUY", str(num) + "x", bid_pr)
             cpos += num
 
         cpos = self.position[product]
@@ -144,10 +146,12 @@ class Trader:
                 cpos += order_for
                 assert (order_for <= 0)
                 orders.append(Order(product, bid, order_for))
+                print("SELL", str(-order_for) + "x", bid)
 
         if cpos > -LIMIT:
             num = -LIMIT - cpos
             orders.append(Order(product, sell_pr, num))
+            print("LIMIT SELL", str(-num) + "x", sell_pr)
             cpos += num
 
         return orders
@@ -239,44 +243,54 @@ class Trader:
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            if product == 'AMETHYSTS':
-                # orders that doesn't walk the book
-                # liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_BBO_liquidity_take(
-                #     10_000, product, state, ordered_position, estimated_traded_lob)
-                # orders that walk the book
-                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
-                    10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
-                # result[product] = liquidity_take_order
-                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-                                                                                                    state,
-                                                                                                    ordered_position,
-                                                                                                    estimated_traded_lob)
-                result[product] = liquidity_take_order + mm_order
+            # if product == 'AMETHYSTS':
+            #     # orders that doesn't walk the book
+            #     # liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_BBO_liquidity_take(
+            #     #     10_000, product, state, ordered_position, estimated_traded_lob)
+            #     # orders that walk the book
+            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
+            #         10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
+            #     # result[product] = liquidity_take_order
+            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+            #                                                                                         state,
+            #                                                                                         ordered_position,
+            #                                                                                         estimated_traded_lob)
+            #     result[product] = liquidity_take_order + mm_order
             if product == 'STARFRUIT':
                 result[product] = []
                 self.position[product] = state.position.get(product, 0)
-
+                print('order book', state.order_depths[product].buy_orders, state.order_depths[product].sell_orders)
                 # 更新STARFRUIT价格缓存
                 _, bs_starfruit = self.shaoqin_values_extract(
                     collections.OrderedDict(sorted(state.order_depths[product].sell_orders.items())))
                 _, bb_starfruit = self.shaoqin_values_extract(
                     collections.OrderedDict(sorted(state.order_depths[product].buy_orders.items(), reverse=True)),
                     1)
+                print('bs_starfruit', bs_starfruit)
+                print('bb_starfruit', bb_starfruit)
+                print('cache_number',(bs_starfruit + bb_starfruit) / 2)
                 self.starfruit_cache.append((bs_starfruit + bb_starfruit) / 2)
                 if len(self.starfruit_cache) > self.starfruit_dim:
                     self.starfruit_cache.pop(0)
+                if len(self.starfruit_cache) == self.starfruit_dim:
+                    print(f'cache: {self.starfruit_cache}')
+                    predicted_price = self.shaoqin_calc_next_price_starfruit()
+                    print('predicted_price: ' + str(predicted_price))
+                    # 计算可接受的买卖价格
+                    accept_range = 2
+                    acc_bid = predicted_price - accept_range
+                    acc_ask = predicted_price + accept_range
 
-                # 计算可接受的买卖价格
-                accept_range = 2
-                acc_bid = self.shaoqin_calc_next_price_starfruit() - accept_range
-                acc_ask = self.shaoqin_calc_next_price_starfruit() + accept_range
-
-                # 为STARFRUIT生成订单
+                    # 为STARFRUIT生成订单
+                    order_depth = state.order_depths[product]
+                    orders = self.shaoqin_compute_orders_regression(product, order_depth, acc_bid, acc_ask, self.POSITION_LIMIT[product])
+                    result[product] += orders
+            if product == 'ORCHIDS':
                 order_depth = state.order_depths[product]
-                orders = self.shaoqin_compute_orders_regression(product, order_depth, acc_bid, acc_ask, self.POSITION_LIMIT[product])
-                result[product] += orders
+                print('order_depth: ', order_depth.buy_orders, order_depth.sell_orders)
+                print("observation", state.observations.plainValueObservations)
 
         print('post_trade_position: ' + str(ordered_position))
         # store the new cache
-        conversions = 1
+        conversions = 0
         return result, conversions, 'Can_be_replaced'

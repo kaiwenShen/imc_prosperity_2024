@@ -8,35 +8,22 @@ class Trader:
     def run(self, state: TradingState):
         print("traderData: " + state.traderData)
         print("Observations: " + str(state.observations))
-
-        # Orders to be placed on exchange matching engine
+        print("Position: " + str(state.position))
         result = {}
-        for product in state.order_depths:
-            order_depth: OrderDepth = state.order_depths[product]
-            orders: List[Order] = []
-            acceptable_price = 10  # Participant should calculate this value
-            print("Acceptable price : " + str(acceptable_price))
-            print("Buy Order depth : " + str(len(order_depth.buy_orders)) + ", Sell order depth : " + str(
-                len(order_depth.sell_orders)))
+        # Orders to be placed on exchange matching engine
+        best_ask, best_ask_amount = list(state.order_depths['ORCHIDS'].sell_orders.items())[0]
 
-            if len(order_depth.sell_orders) != 0:
-                best_ask, best_ask_amount = list(order_depth.sell_orders.items())[0]
-                if int(best_ask) < acceptable_price:
-                    print("BUY", str(-best_ask_amount) + "x", best_ask)
-                    orders.append(Order(product, best_ask, -best_ask_amount))
+        result = {'ORCHIDS': [Order('ORCHIDS', best_ask, abs(best_ask_amount))]}
 
-            if len(order_depth.buy_orders) != 0:
-                best_bid, best_bid_amount = list(order_depth.buy_orders.items())[0]
-                if int(best_bid) > acceptable_price:
-                    print("SELL", str(best_bid_amount) + "x", best_bid)
-                    orders.append(Order(product, best_bid, -best_bid_amount))
-
-            result[product] = orders
 
             # String value holding Trader state data required.
         # It will be delivered as TradingState.traderData on next execution.
         traderData = "SAMPLE"
-
+        ask = state.observations.conversionObservations['ORCHIDS'].askPrice
         # Sample conversion request. Check more details below.
-        conversions = 1
+        # if 'ORCHIDS' in state.position.keys():
+        #     conversions = -state.position['ORCHIDS']
+        # else:
+        #     conversions = 0
+        conversions = best_ask_amount
         return result, conversions, traderData

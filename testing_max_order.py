@@ -23,7 +23,7 @@ class Trader:
                     orders.append(Order(product, best_ask, max(5,best_ask_amount)))
                 else:
                     orders.append(Order(product, best_bid, -5))
-                    orders.append(Order(product, best_ask, 10))
+                    orders.append(Order(product, best_ask, 16))
 
             result[product] = orders
 
