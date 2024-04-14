@@ -25,5 +25,7 @@ class Trader:
         #     conversions = -state.position['ORCHIDS']
         # else:
         #     conversions = 0
+        if 'ORCHIDS' in state.own_trades.keys():
+            print(state.own_trades['ORCHIDS'])
         conversions=-1
         return result, conversions, traderData

@@ -87,7 +87,9 @@ class Trader:
         orc_imbalance = self.calculate_imbalance(state, 'ORCHIDS')
         # cache formulation
         current_cache = [{'STARFRUIT': [star_midprice, star_majority_midprice, star_majority_vol, star_imbalance],
-                          'ORCHIDS': [orc_midprice, orc_majority_midprice, orc_majority_vol, orc_imbalance]}]
+                          'ORCHIDS': [None, None, None, orc_midprice, orc_majority_midprice, orc_majority_vol,
+                                      orc_imbalance]}]
+        # for ORCHIDS, the first three elements are for conversion_cache, liquidity provide price, liquidity provide amount
         if state.timestamp == 0:
             return current_cache
         new_cache = copy.deepcopy(
@@ -289,13 +291,13 @@ class Trader:
         """
         orders: List[Order] = []
         buy_available_position, sell_available_position = self.cal_available_position(product, state, ordered_position)
-        best_bid,_ = self.stanford_values_extract(estimated_traded_lob[product].buy_orders, 1)
-        best_ask,_ = self.stanford_values_extract(estimated_traded_lob[product].sell_orders, -1)
         product_position = state.position[product] if product in state.position.keys() else 0
         product_position += ordered_position[product]
         # we compute liquidity take first
         acceptable_ask = predicted_price + acceptable_range
         acceptable_bid = predicted_price - acceptable_range
+        best_bid, _ = self.stanford_values_extract(estimated_traded_lob[product].buy_orders, 1)
+        best_ask, _ = self.stanford_values_extract(estimated_traded_lob[product].sell_orders, -1)
         print(f'buy_available_position: {buy_available_position}, sell_available_position: {sell_available_position}')
         for ask, ask_amount in list(estimated_traded_lob[product].sell_orders.items()):
             if ask <= acceptable_bid or (product_position < 0 and ask == acceptable_bid + 1):
@@ -317,6 +319,7 @@ class Trader:
                         ordered_position,
                         estimated_traded_lob)
                     orders += order
+
         # we then decide which way to provide liquidity
         provide_ask, provide_bid = False, False
         if best_ask - 1 >= acceptable_ask and sell_available_position > 0:
@@ -351,6 +354,82 @@ class Trader:
         X = np.array([traderDataNew[i]['STARFRUIT'][1] for i in range(len(traderDataNew))])[::-1]
         return int(round(intercept + np.dot(coef, X)))
 
+    @staticmethod
+    def overhead_calculation(state, product):
+        foreign_ask = state.observations.conversionObservations[product].askPrice
+        foreign_bid = state.observations.conversionObservations[product].bidPrice
+        transport = state.observations.conversionObservations[product].transportFees
+        export_tariff = state.observations.conversionObservations[product].exportTariff
+        import_tariff = state.observations.conversionObservations[product].importTariff
+        fair_bid = foreign_bid - transport - export_tariff - 0.1
+        fair_ask = foreign_ask + transport + import_tariff
+        return fair_ask, fair_bid
+
+    def kevin_exchange_arb(self, product, state, ordered_position, estimated_traded_lob, traderDataNew,
+                           max_limit: int = 100):
+        if state.timestamp == 0 and product not in state.position.keys():
+            conversions = 0
+        else:
+            # we deal with the conversion from last time slice
+            conversions = traderDataNew[-2][product][0]  # note that -1 is the current time slice
+            # we need to check if our one side liquidity provide is filled or not
+            liquidity_provide_price, liquidity_provide_amount = traderDataNew[-2][product][1], \
+                traderDataNew[-2][product][2]
+            trade_list = state.own_trades[product] if product in state.own_trades.keys() else []
+            if liquidity_provide_price is not None:
+                for trade in trade_list:
+                    if trade.price == liquidity_provide_price and (
+                            trade.buyer == 'SUMBISSION' or trade.seller == 'SUMBISSION'):
+                        side = np.sign(liquidity_provide_amount)
+                        if side == 1:
+                            # we bought these amount, we need to sell them at foreign exchange
+                            conversions -= trade.quantity
+                        else:
+                            # we sold these amount, we need to buy them at foreign exchange
+                            conversions += trade.quantity
+                        break
+
+        orders: List[Order] = []
+        conversions_cache = 0
+        order_depth: OrderDepth = copy.deepcopy(state.order_depths[product])
+        foreign_exchange_ask, foreign_exchange_bid = self.overhead_calculation(state, product)
+        buy_available_position, sell_available_position = self.cal_available_position(product, state, ordered_position)
+        # calculate available position to use
+        buy_available_position = min(buy_available_position, max_limit)
+        sell_available_position = min(sell_available_position, max_limit)
+        # check if there is arb opportunity for sell orderbook
+        # flow: we buy at local, sell at foreign
+        for ask, ask_amount in order_depth.sell_orders.items():
+            print(f"ask: {ask}, foreign_exchange_bid: {foreign_exchange_bid}, arb condition: {ask < foreign_exchange_bid}")
+            if ask < foreign_exchange_bid:
+                # we can buy at local, sell at foreign
+                if buy_available_position > 0:
+                    order, buy_available_position, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                        product, ask, ask_amount,
+                        buy_available_position, 1,
+                        ordered_position,
+                        estimated_traded_lob)
+                    orders += order
+                    conversions_cache += -order[0].quantity  # we want to do the opposite at foreign exchange
+        # check if there is arb opportunity for buy orderbook
+        # flow: we sell at local, buy at foreign
+        for bid, bid_amount in order_depth.buy_orders.items():
+            print(f"bid: {bid}, foreign_exchange_ask: {foreign_exchange_ask}, arb condition: {bid > foreign_exchange_ask}")
+            if bid > foreign_exchange_ask:
+                # we can sell at local, buy at foreign
+                if sell_available_position > 0:
+                    order, sell_available_position, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                        product, bid, bid_amount,
+                        sell_available_position, -1,
+                        ordered_position,
+                        estimated_traded_lob)
+                    orders += order
+                    conversions_cache += -order[0].quantity  # we want to do the opposite at foreign exchange
+
+        traderDataNew[-1][product][0] = conversions_cache
+        print(f"cached conversions: {conversions_cache}")
+        return conversions, orders, ordered_position, estimated_traded_lob, traderDataNew
+
     def run(self, state: TradingState):
         # read in the previous cache
         traderDataOld = self.decode_trader_data(state)
@@ -361,18 +440,21 @@ class Trader:
         estimated_traded_lob = copy.deepcopy(state.order_depths)
         print("Observations: " + str(state.observations))
         print('pre_trade_position: ' + str(state.position))
+        print('orchids_order_depth: ' + str(state.order_depths['ORCHIDS'].sell_orders)+str(state.order_depths['ORCHIDS'].buy_orders))
+
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            if product == 'AMETHYSTS':
-                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
-                    10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
-                # result[product] = liquidity_take_order
-                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-                                                                                                    state,
-                                                                                                    ordered_position,
-                                                                                                    estimated_traded_lob)
-                result[product] = liquidity_take_order + mm_order
+            # if product == 'AMETHYSTS':
+            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
+            #         10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
+            #     # result[product] = liquidity_take_order
+            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+            #                                                                                         state,
+            #                                                                                         ordered_position,
+            #                                                                                         estimated_traded_lob)
+            #     result[product] = liquidity_take_order + mm_order
+
             # if product == 'STARFRUIT':
             #     if len(traderDataNew) == NUM_OF_DATA_POINT:
             #         # we have enough data to make prediction
@@ -381,14 +463,20 @@ class Trader:
             #         # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
             #         #                                                                                  ordered_position,
             #         #                                                                                  estimated_traded_lob)
-            #         print('lob starfruit sell: ' + str(state.order_depths['STARFRUIT'].sell_orders))
-            #         print('lob starfruit buy: ' + str(state.order_depths['STARFRUIT'].buy_orders))
             #         cover_orders = []
             #         hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
             #                                                                                   product, state,
             #                                                                                   ordered_position,
-            #                                                                                   estimated_traded_lob)
+            #                                                                                   estimated_traded_lob,
+            #                                                                                   acceptable_range=2)
             #         result[product] = cover_orders + hft_orders
-
-        conversions = 0
+            if product == 'ORCHIDS':
+                conversions, orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
+                    product, state,
+                    ordered_position,
+                    estimated_traded_lob,
+                    traderDataNew)
+                result[product] = orders
+                print(f"conversions at this time slice: {conversions}")
+        # conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
