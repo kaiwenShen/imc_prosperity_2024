@@ -295,7 +295,7 @@ class Trader:
         return orders, ordered_position, estimated_traded_lob
 
     def kevin_price_hft(self, predicted_price, product, state, ordered_position, estimated_traded_lob,
-                        acceptable_range=2):
+                        acceptable_range=2, standford_price=True):
         """
         per stanford logic, we will liquidity take when best bid/ask is within 2 of the predicted price or
         when we have opposite position and the best bid/ask is at +-2 of the predicted price.
@@ -308,9 +308,13 @@ class Trader:
         # we compute liquidity take first
         acceptable_ask = predicted_price + acceptable_range
         acceptable_bid = predicted_price - acceptable_range
-        best_bid, _ = self.stanford_values_extract(estimated_traded_lob[product].buy_orders, 1)
-        best_ask, _ = self.stanford_values_extract(estimated_traded_lob[product].sell_orders, -1)
-        print(f'buy_available_position: {buy_available_position}, sell_available_position: {sell_available_position}')
+        if standford_price:
+            best_bid, _ = self.stanford_values_extract(estimated_traded_lob[product].buy_orders, 1)
+            best_ask, _ = self.stanford_values_extract(estimated_traded_lob[product].sell_orders, -1)
+        else:
+            best_bid, _, best_ask, _ = self.get_best_bid_ask(product, estimated_traded_lob)
+        print(
+            f'price_hft: best_bid: {best_bid}, best_ask: {best_ask}, acceptable_bid: {acceptable_bid}, acceptable_ask: {acceptable_ask}')
         for ask, ask_amount in list(estimated_traded_lob[product].sell_orders.items()):
             if ask <= acceptable_bid or (product_position < 0 and ask == acceptable_bid + 1):
                 # we liquidity take the best ask
@@ -364,6 +368,19 @@ class Trader:
         coef = [0.18898843, 0.20770677, 0.26106908, 0.34176867]
         intercept = 2.356494353223752
         X = np.array([traderDataNew[i]['STARFRUIT'][1] for i in range(len(traderDataNew))])[::-1]
+        return int(round(intercept + np.dot(coef, X)))
+
+    def shaoqin_r2_orchids_pred(self, traderDataNew) -> int:
+        coef = 1
+        intercept = 0
+        return int(round(intercept + coef * traderDataNew[-1]['ORCHIDS'][8]))
+
+    def tongfei_r2_orchids_pred(self, traderDataNew) -> int:
+        coef = [0.03505737066667942, 3.7800693377867836, 7.7039004312429835, ]
+        intercept = 648.6118462473457
+        import_cost = traderDataNew[-1]['ORCHIDS'][5] + traderDataNew[-1]['ORCHIDS'][6] + traderDataNew[-1]['ORCHIDS'][
+            7]
+        X = np.array([traderDataNew[-1]['ORCHIDS'][3], traderDataNew[-1]['ORCHIDS'][4], import_cost])
         return int(round(intercept + np.dot(coef, X)))
 
     @staticmethod
@@ -480,6 +497,22 @@ class Trader:
         print(f"cached conversions: {conversions_cache}")
         return conversions, orders, ordered_position, estimated_traded_lob, traderDataNew
 
+    @staticmethod
+    def edge_detection(humidity_now):
+        at_the_lower_edge = False
+        at_the_upper_edge = False
+        range_momentum = 10
+        if 60 <= humidity_now <= 60 + range_momentum:
+            at_the_lower_edge = True
+        if 80 - range_momentum <= humidity_now <= 80:
+            at_the_upper_edge = True
+        return at_the_lower_edge, at_the_upper_edge
+
+    def kevin_humidity(self, tradeDataNew):
+        historical_humidity = self.extract_from_cache(tradeDataNew, 'ORCHIDS', 4)
+        if historical_humidity[0]<historical_humidity[1] and historical_humidity[0]>80:
+            return 1
+
     def run(self, state: TradingState):
         # read in the previous cache
         traderDataOld = self.decode_trader_data(state)
@@ -496,31 +529,31 @@ class Trader:
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            # if product == 'AMETHYSTS':
-            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
-            #         10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
-            #     # result[product] = liquidity_take_order
-            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-            #                                                                                         state,
-            #                                                                                         ordered_position,
-            #                                                                                         estimated_traded_lob)
-            #     result[product] = liquidity_take_order + mm_order
+            if product == 'AMETHYSTS':
+                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
+                    10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
+                # result[product] = liquidity_take_order
+                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+                                                                                                    state,
+                                                                                                    ordered_position,
+                                                                                                    estimated_traded_lob)
+                result[product] = liquidity_take_order + mm_order
 
-            # if product == 'STARFRUIT':
-            #     if len(traderDataNew) == NUM_OF_DATA_POINT:
-            #         # we have enough data to make prediction
-            #         predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
-            #         print(f"Predicted price: {predicted_price}")
-            #         # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
-            #         #                                                                                  ordered_position,
-            #         #                                                                                  estimated_traded_lob)
-            #         cover_orders = []
-            #         hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
-            #                                                                                   product, state,
-            #                                                                                   ordered_position,
-            #                                                                                   estimated_traded_lob,
-            #                                                                                   acceptable_range=2)
-            #         result[product] = cover_orders + hft_orders
+            if product == 'STARFRUIT':
+                if len(traderDataNew) == NUM_OF_DATA_POINT:
+                    # we have enough data to make prediction
+                    predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
+                    print(f"Predicted price: {predicted_price}")
+                    # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
+                    #                                                                                  ordered_position,
+                    #                                                                                  estimated_traded_lob)
+                    cover_orders = []
+                    hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
+                                                                                              product, state,
+                                                                                              ordered_position,
+                                                                                              estimated_traded_lob,
+                                                                                              acceptable_range=2)
+                    result[product] = cover_orders + hft_orders
             if product == 'ORCHIDS':
                 conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
                     product, state,
@@ -529,8 +562,32 @@ class Trader:
                     traderDataNew,
                     max_limit=65
                 )
-
                 result[product] = arb_orders
+                # if len(traderDataNew) == NUM_OF_DATA_POINT:
+                #     # we have enough data to make prediction
+                #     predicted_direction = self.kevin_humidity(traderDataNew)
+                # #     # arb_orders += hft_orders
+                # #     # result[product] = arb_orders
+                #     best_bid, best_bid_amount, best_ask, best_ask_amount = self.get_best_bid_ask(product,
+                #                                                                                  estimated_traded_lob)
+                #     sell_available_position, buy_available_position = self.cal_available_position(product, state,
+                #                                                                                   ordered_position)
+                #     if predicted_direction == 1:
+                #         # we predict the price will go up
+                #         hft_orders, _, _, _ = self.kevin_market_take(product, best_ask, best_ask_amount,
+                #                                                      buy_available_position, 1, ordered_position,
+                #                                                      estimated_traded_lob)
+                #     elif predicted_direction == -1:
+                #         # we predict the price will go down
+                #         hft_orders, _, _, _ = self.kevin_market_take(product, best_bid, best_bid_amount,
+                #                                                      sell_available_position, -1, ordered_position,
+                #                                                      estimated_traded_lob)
+                    # else:
+                    #     hft_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
+                    #                                                                                    ordered_position,
+                    #                                                                                    estimated_traded_lob)
+                    # result[product] += hft_orders
+                # conversions = 0
                 print(f"conversions at this time slice: {conversions}")
         # conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
