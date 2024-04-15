@@ -412,8 +412,14 @@ class Trader:
 
             trade_list = state.own_trades[product] if product in state.own_trades.keys() else []
             for trade in trade_list:
-                if trade.price == liquidity_provide_price and trade.quantity != conversions:
-                    conversions += trade.quantity
+                print(f"trade: {trade.quantity},{trade.quantity==conversions}")
+                if trade.price == liquidity_provide_price and trade.quantity != abs(conversions):
+                    if np.sign(liquidity_provide_amount)==-1:
+                        # then we need to buy back those position from foreign exchange
+                        conversions+= trade.quantity
+                    else:
+                        # we need to sell those position to foreign exchange
+                        conversions -= trade.quantity
 
         orders: List[Order] = []
         conversion_price_cache = 0
@@ -552,7 +558,7 @@ class Trader:
                     ordered_position,
                     estimated_traded_lob,
                     traderDataNew,
-                    max_limit=65,
+                    max_limit=70,
                     profit_margin=1
                 )
                 result[product] = arb_orders
