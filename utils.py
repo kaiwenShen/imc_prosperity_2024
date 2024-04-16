@@ -1,4 +1,4 @@
-
+import numpy as np
 def exponential_halflife(length: int, half_life: int) -> np.ndarray:
     """
     exponential halflife decay function of certain lenghth.

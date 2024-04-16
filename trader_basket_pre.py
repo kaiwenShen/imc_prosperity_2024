@@ -60,6 +60,7 @@ class Trader:
 
         diff_mean_premium = mid_price['GIFT_BASKET'] - mid_price['STRAWBERRIES'] * 6 - mid_price['CHOCOLATE'] * 4 - mid_price[
             'ROSES'] - 379.49
+        print(f'fair_price_deviation: {diff_mean_premium}')
 
         trade_at = self.basket_std * 0.5
 
@@ -75,21 +76,21 @@ class Trader:
 
         if diff_mean_premium > trade_at:
             vol = self.position['GIFT_BASKET'] + self.POSITION_LIMIT['GIFT_BASKET']
-            self.cont_buy_basket_unfill = 0  # no need to buy rn
+            # self.cont_buy_basket_unfill = 0  # no need to buy rn
             assert (vol >= 0)
             if vol > 0:
                 orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_buy['GIFT_BASKET'], -vol))
-                print('BUY'+str(vol)+'@'+str(worst_buy['GIFT_BASKET']))
-                self.cont_sell_basket_unfill += 2
+                print('SELL'+str(vol)+'@'+str(worst_buy['GIFT_BASKET']))
+                # self.cont_sell_basket_unfill += 2
                 # pb_neg -= vol
         elif diff_mean_premium < -trade_at:
             vol = self.POSITION_LIMIT['GIFT_BASKET'] - self.position['GIFT_BASKET']
-            self.cont_sell_basket_unfill = 0  # no need to sell rn
+            # self.cont_sell_basket_unfill = 0  # no need to sell rn
             assert (vol >= 0)
             if vol > 0:
                 orders['GIFT_BASKET'].append(Order('GIFT_BASKET', worst_sell['GIFT_BASKET'], vol))
-                print('SELL'+str(vol)+'@'+str(worst_sell['GIFT_BASKET']))
-                self.cont_buy_basket_unfill += 2
+                print('BUY'+str(vol)+'@'+str(worst_sell['GIFT_BASKET']))
+                # self.cont_buy_basket_unfill += 2
                 # pb_pos += vol
 
         return orders
@@ -100,14 +101,14 @@ class Trader:
         # Iterate over all the keys (the available products) contained in the order dephts
         self.position['GIFT_BASKET'] = state.position.get('GIFT_BASKET', 0)
 
-        for product in state.market_trades.keys():
-            for trade in state.market_trades[product]:
-                if trade.buyer == trade.seller:
-                    continue
-                self.person_position[trade.buyer][product] = 1.5
-                self.person_position[trade.seller][product] = -1.5
-                self.person_actvalof_position[trade.buyer][product] += trade.quantity
-                self.person_actvalof_position[trade.seller][product] += -trade.quantity
+        # for product in state.market_trades.keys():
+        #     for trade in state.market_trades[product]:
+        #         if trade.buyer == trade.seller:
+        #             continue
+        #         self.person_position[trade.buyer][product] = 1.5
+        #         self.person_position[trade.seller][product] = -1.5
+        #         self.person_actvalof_position[trade.buyer][product] += trade.quantity
+        #         self.person_actvalof_position[trade.seller][product] += -trade.quantity
 
         orders = self.compute_orders_basket(state.order_depths)
         result['GIFT_BASKET'] += orders['GIFT_BASKET']
