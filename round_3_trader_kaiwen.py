@@ -2,6 +2,7 @@ import copy
 
 import jsonpickle
 import numpy as np
+import pandas as pd
 
 from datamodel import OrderDepth, UserId, TradingState, Order
 from typing import List
@@ -388,9 +389,9 @@ class Trader:
     def tongfei_r2_orchids_pred(self, traderDataNew) -> int:
         coef = [0.03505737066667942, 3.7800693377867836, 7.7039004312429835, ]
         intercept = 648.6118462473457
-        import_cost = traderDataNew[-1]['ORCHIDS'][5] + traderDataNew[-1]['ORCHIDS'][6] + traderDataNew[-1]['ORCHIDS'][
-            7]
-        X = np.array([traderDataNew[-1]['ORCHIDS'][3], traderDataNew[-1]['ORCHIDS'][4], import_cost])
+        import_cost = traderDataNew[-1]['ORCHIDS'][6] + traderDataNew[-1]['ORCHIDS'][7] + traderDataNew[-1]['ORCHIDS'][
+            8]
+        X = np.array([traderDataNew[-1]['ORCHIDS'][4], traderDataNew[-1]['ORCHIDS'][5], import_cost])
         return int(round(intercept + np.dot(coef, X)))
 
     @staticmethod
@@ -526,27 +527,35 @@ class Trader:
         return fair_price_deviation, fair_price
 
     def kevin_spread_trading(self, product, state, ordered_position, estimated_traded_lob,
-                             fair_price_deviation, fair_price, deviation_threshold, cover_position=False):
+                             fair_price_deviation, fair_price, deviation_threshold, cover_position=False,
+                             liquidity_fraction: float = 0.3):
         orders: List[Order] = []
         worst_bid, worst_bid_amount, worst_ask, worst_ask_amount = self.get_worst_bid_ask(product, estimated_traded_lob)
+        best_bid, best_bid_amount, best_ask, best_ask_amount = self.get_best_bid_ask(product, estimated_traded_lob)
         buy_available_position, sell_available_position = self.cal_available_position(product, state, ordered_position)
         print('sell_available_position: ' + str(sell_available_position))
         print('buy_available_position: ' + str(buy_available_position))
         if fair_price_deviation > deviation_threshold and sell_available_position > 0:
             # we sell at worst bid, anticipating mean reversion
-            order = Order(product, worst_bid, -sell_available_position)
-            print(f"SELL {product} {sell_available_position}x {worst_bid}")
+            # gradually taking position: we take half liquidity of the lob
+            liquidity = int(round(sum(estimated_traded_lob[product].buy_orders.values()) * liquidity_fraction))
+            pos = min(sell_available_position, liquidity)
+            order = Order(product, worst_bid, -pos)
             orders.append(order)
-            ordered_position = self.update_estimated_position(ordered_position, product, -sell_available_position,
+            print(f"SELL {product} {pos}x {worst_bid}")
+            ordered_position = self.update_estimated_position(ordered_position, product, -pos,
                                                               -1)
+            sell_available_position -= pos
 
         elif fair_price_deviation < -deviation_threshold and buy_available_position > 0:
             # we buy, anticipating mean reversion
-            order = Order(product, worst_ask, buy_available_position)
-            print(f"BUY {product} {buy_available_position}x {worst_ask}")
-            orders.append(order)
-            ordered_position = self.update_estimated_position(ordered_position, product, buy_available_position, 1)
+            liquidity = -int(round(sum(estimated_traded_lob[product].sell_orders.values()) * liquidity_fraction))
+            pos = min(buy_available_position, liquidity)
 
+            order = Order(product, worst_ask, pos)
+            print(f"BUY {product} {pos}x {worst_ask}")
+            orders.append(order)
+            ordered_position = self.update_estimated_position(ordered_position, product, pos, 1)
         elif cover_position:
             # our mid-price is within the threshold, we attempt to cover our position
             current_pos = state.position[product] if product in state.position.keys() else 0
@@ -583,37 +592,37 @@ class Trader:
         estimated_traded_lob = copy.deepcopy(state.order_depths)
         print("Observations: " + str(state.observations))
         print('pre_trade_position: ' + str(state.position))
-        print('basket_order_depth: ' + str(state.order_depths['GIFT_BASKET'].sell_orders) + str(
-            state.order_depths['GIFT_BASKET'].buy_orders))
+        print('ORCHIDS_order_depth: ' + str(state.order_depths['ORCHIDS'].sell_orders) + str(
+            state.order_depths['ORCHIDS'].buy_orders))
 
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            if product == 'AMETHYSTS':
-                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
-                    10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
-                # result[product] = liquidity_take_order
-                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-                                                                                                    state,
-                                                                                                    ordered_position,
-                                                                                                    estimated_traded_lob)
-                result[product] = liquidity_take_order + mm_order
-                # pnl = 3.5k
-            #
-            if product == 'STARFRUIT':
-                if len(traderDataNew) == NUM_OF_DATA_POINT:
-                    # we have enough data to make prediction
-                    predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
-                    print(f"Predicted price: {predicted_price}")
-                    # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
-                    #                                                                                  ordered_position,
-                    #                                                                                  estimated_traded_lob)
-                    hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
-                                                                                              product, state,
-                                                                                              ordered_position,
-                                                                                              estimated_traded_lob,
-                                                                                              acceptable_range=2)
-                    result[product] = hft_orders
+            # if product == 'AMETHYSTS':
+            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
+            #         10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
+            #     # result[product] = liquidity_take_order
+            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+            #                                                                                         state,
+            #                                                                                         ordered_position,
+            #                                                                                         estimated_traded_lob)
+            #     result[product] = liquidity_take_order + mm_order
+            #     # pnl = 3.5k
+            # #
+            # if product == 'STARFRUIT':
+            #     if len(traderDataNew) == NUM_OF_DATA_POINT:
+            #         # we have enough data to make prediction
+            #         predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
+            #         print(f"Predicted price: {predicted_price}")
+            #         # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
+            #         #                                                                                  ordered_position,
+            #         #                                                                                  estimated_traded_lob)
+            #         hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
+            #                                                                                   product, state,
+            #                                                                                   ordered_position,
+            #                                                                                   estimated_traded_lob,
+            #                                                                                   acceptable_range=2)
+            #         result[product] = hft_orders
             if product == 'ORCHIDS':
                 conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
                     product, state,
@@ -623,52 +632,79 @@ class Trader:
                     max_limit=70,
                     profit_margin=1
                 )
+                pred_price = self.tongfei_r2_orchids_pred(traderDataNew)
+                mid_price = self.calculate_mid_price(state, product)
+                buy_available_position, sell_available_position = self.cal_available_position(product, state,
+                                                                                             ordered_position)
+                if pred_price > mid_price:
+                    for ask, ask_amount in estimated_traded_lob[product].sell_orders.items():
+                        if ask < pred_price and buy_available_position > 0:
+                            order, buy_available_position, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                                product, ask, ask_amount,
+                                buy_available_position, 1,
+                                ordered_position,
+                                estimated_traded_lob)
+                            arb_orders += order
+                elif pred_price < mid_price:
+                    for bid, bid_amount in estimated_traded_lob[product].buy_orders.items():
+                        if bid > pred_price and sell_available_position > 0:
+                            order, sell_available_position, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                                product, bid, bid_amount,
+                                sell_available_position, -1,
+                                ordered_position,
+                                estimated_traded_lob)
+                            arb_orders += order
+                print(f"pred_price for orchids: {pred_price}")
+                print(f'orchids current mid_price: {mid_price}')
                 result[product] = arb_orders
                 print(f"conversions at this time slice: {conversions}")
-            if product == 'GIFT_BASKET':
-                fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
-                print(f"{product}fair_price_deviation: {fair_price_deviation}")
-                deviation_threshold = 10 / 2  # 25/2
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           fair_price_deviation,
-                                                                                           fair_price,
-                                                                                           deviation_threshold,
-                                                                                           cover_position=False)
-                result[product] = orders
-            if product == 'CHOCOLATE':
-                fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
-                print(f"{product}fair_price_deviation: {fair_price_deviation}")
-                deviation_threshold = 10 / 2
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           -fair_price_deviation,
-                                                                                           fair_price,
-                                                                                           deviation_threshold)
-                result[product] = orders
-            if product == 'STRAWBERRIES':
-                fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
-                print(f"{product}fair_price_deviation: {fair_price_deviation}")
-                deviation_threshold = 15 / 2
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           -fair_price_deviation,
-                                                                                           fair_price,
-                                                                                           deviation_threshold)
-                result[product] = orders
-            if product == 'ROSES':
-                fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
-                print(f"{product}fair_price_deviation: {fair_price_deviation}")
-                deviation_threshold = 5 / 2
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           -fair_price_deviation,
-                                                                                           fair_price,
-                                                                                           deviation_threshold)
-                result[product] = orders
+
+            # if product == 'GIFT_BASKET':
+            #     fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
+            #     deviation_threshold = 10 / 2  # 25/2
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                fair_price_deviation,
+            #                                                                                fair_price,
+            #                                                                                deviation_threshold,
+            #                                                                                cover_position=False)
+            #     result[product] = orders
+            # if product == 'CHOCOLATE':
+            #     fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
+            #     print(f"{product}fair_price_deviation: {fair_price_deviation}")
+            #     deviation_threshold = 10 / 2
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                -fair_price_deviation,
+            #                                                                                fair_price,
+            #                                                                                deviation_threshold,
+            #                                                                                liquidity_fraction=0.125)
+            #     result[product] = orders
+            # if product == 'STRAWBERRIES':
+            #     fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
+            #     print(f"{product}fair_price_deviation: {fair_price_deviation}")
+            #     deviation_threshold = 15 / 2
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                -fair_price_deviation,
+            #                                                                                fair_price,
+            #                                                                                deviation_threshold,
+            #                                                                                liquidity_fraction=0.25)
+            #     result[product] = orders
+            # if product == 'ROSES':
+            #     fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
+            #     print(f"{product}fair_price_deviation: {fair_price_deviation}")
+            #     deviation_threshold = 5 / 2
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                -fair_price_deviation,
+            #                                                                                fair_price,
+            #                                                                                deviation_threshold,
+            #                                                                                liquidity_fraction=0.25)
+            #     result[product] = orders
         # conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
