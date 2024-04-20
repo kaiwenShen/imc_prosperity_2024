@@ -637,7 +637,7 @@ class Trader:
             elif pct_going_up > 1 - pct_threshold:
                 return 1
         return 0
-    def r4_coconut_coupon_signal(self, traderDataNew, k=0.2,pct_threshold=0.5):
+    def r4_coconut_coupon_signal(self, traderDataNew, k=0.5,pct_threshold=0.2):
         residual = self.extract_from_cache(traderDataNew, 'COCONUT_COUPON', 0)
         residual_diff = np.sign(np.diff(residual))
         pct_going_up = np.sum(residual_diff == -1) / len(residual_diff)# if sign is negative, it is going up
@@ -767,7 +767,8 @@ class Trader:
                                                                                            ordered_position,
                                                                                            estimated_traded_lob,
                                                                                            coconut_direction, 1,
-                                                                                           anchor_product='COCONUT',)
+                                                                                           anchor_product='COCONUT',
+                                                                                           liquidity_fraction=0.3)
                 result[product] = orders
             if product == 'COCONUT_COUPON':
                 if len(traderDataNew) > 1:
@@ -778,8 +779,9 @@ class Trader:
                 orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
                                                                                            ordered_position,
                                                                                            estimated_traded_lob,
-                                                                                           coconut_direction, -3,
-                                                                                           anchor_product='COCONUT',)
+                                                                                           coconut_direction, 3,
+                                                                                           anchor_product='COCONUT',
+                                                                                           liquidity_fraction=0.3)
                 result[product] = orders
         conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
