@@ -97,6 +97,34 @@ class Trader:
         worst_ask = max(sell_lob) if sell_lob else 0
         return worst_bid, order_depth.buy_orders[worst_bid], worst_ask, order_depth.sell_orders[worst_ask]
 
+    @staticmethod
+    def r4_current_coconut_fair_price(state):
+        order_depth = state.order_depths['COCONUT_COUPON']
+        try:
+            best_bid = list(order_depth.buy_orders.keys())[0]
+        except IndexError:
+            # if this time slice the best bid is None, we use the last time slice best bid
+            if state.timestamp == 0:
+                best_bid = None
+            else:
+                best_bid = state.traderData[-1]['COCONUT'][0]
+        try:
+            best_ask = list(order_depth.sell_orders.keys())[0]
+        except IndexError:
+            # if this time slice the best ask is None, we use the last time slice best ask
+            if state.timestamp == 0:
+                best_ask = None
+            else:
+                best_ask = state.traderData[-1]['COCONUT'][1]
+        coconut_best_bid, coconut_best_ask = list(state.order_depths['COCONUT'].buy_orders.keys())[0], list(
+            state.order_depths['COCONUT'].sell_orders.keys())[0]
+        mid_price_coupon = (best_bid + best_ask) / 2
+        intercept = 8841.201392746636
+        coef = 1.82459034
+        y_t = intercept + coef * mid_price_coupon
+        residual = (coconut_best_ask + coconut_best_bid) / 2 - y_t
+        return best_bid, best_ask, residual
+
     def set_up_cached_trader_data(self, state, traderDataOld):
         # for now we just cache the orderDepth.
         star_midprice = self.calculate_mid_price(state, 'STARFRUIT')
@@ -106,12 +134,15 @@ class Trader:
         orc_standford_midprice, orc_majority_vol = self.cal_standford_mid_price_vol(state, 'ORCHIDS')
         orc_imbalance = self.calculate_imbalance(state, 'ORCHIDS')
         sunlight, humidity, importTariff, exportTariff, transportFees = self.get_conversion_obs(state, 'ORCHIDS')
-
+        coupon_best_bid, coupon_best_ask, residual = self.r4_current_coconut_fair_price(state)
         # cache formulation
         current_cache = [{'STARFRUIT': [star_midprice, star_standford_midprice, star_majority_vol, star_imbalance],
                           'ORCHIDS': [None, None, None, None, sunlight, humidity, importTariff, exportTariff,
                                       transportFees,
-                                      orc_midprice, orc_standford_midprice, orc_majority_vol, orc_imbalance]}]
+                                      orc_midprice, orc_standford_midprice, orc_majority_vol, orc_imbalance],
+                          'COCONUT': [coupon_best_bid, coupon_best_ask, residual],
+                          }]
+
         # for ORCHIDS, the first four elements are for pure_arb price, conversion_cache, liquidity provide price, liquidity provide amount
         if state.timestamp == 0:
             return current_cache
@@ -408,29 +439,31 @@ class Trader:
 
     def kevin_exchange_arb(self, product, state, ordered_position, estimated_traded_lob, traderDataNew,
                            max_limit: int = 100, profit_margin=2):
-        if state.timestamp == 0 and product not in state.position.keys():
-            conversions = 0
-        else:
-            # we deal with the conversion from last time slice
-            conversions_price, conversions = traderDataNew[-2][product][0], traderDataNew[-2][product][1]
-            # we need to check if our one side liquidity provide is filled or not
-            liquidity_provide_price, liquidity_provide_amount = traderDataNew[-2][product][2], \
-                traderDataNew[-2][product][3]
-            print(f'cached_conversion_price: {conversions_price}, cached_conversion_vol: {conversions}')
-            print(f"cached_liquidity provide price: {liquidity_provide_price}, "
-                  f"cached_liquidity provide amount: {liquidity_provide_amount}")
-
-            trade_list = state.own_trades[product] if product in state.own_trades.keys() else []
-            for trade in trade_list:
-                print(f"trade: {trade.quantity},{trade.quantity == conversions}")
-                if trade.price == liquidity_provide_price and trade.quantity != abs(conversions):
-                    if np.sign(liquidity_provide_amount) == -1:
-                        # then we need to buy back those position from foreign exchange
-                        conversions += trade.quantity
-                    else:
-                        # we need to sell those position to foreign exchange
-                        conversions -= trade.quantity
-
+        # if state.timestamp == 0 and product not in state.position.keys():
+        #     conversions = 0
+        # else:
+        # # we deal with the conversion from last time slice
+        # conversions_price, conversions = traderDataNew[-2][product][0], traderDataNew[-2][product][1]
+        # # we need to check if our one side liquidity provide is filled or not
+        # liquidity_provide_price, liquidity_provide_amount = traderDataNew[-2][product][2], \
+        #     traderDataNew[-2][product][3]
+        # print(f'cached_conversion_price: {conversions_price}, cached_conversion_vol: {conversions}')
+        # print(f"cached_liquidity provide price: {liquidity_provide_price}, "
+        #       f"cached_liquidity provide amount: {liquidity_provide_amount}")
+        #
+        # trade_list = state.own_trades[product] if product in state.own_trades.keys() else []
+        # count = 0
+        # for trade in trade_list:
+        #     print(f"trade: {trade.quantity},{trade.quantity == conversions}")
+        #     if trade.price == liquidity_provide_price:
+        #         if trade.quantity == abs(conversions):
+        #             count += 1
+        #         if count>1 or trade.quantity != abs(conversions):
+        #             if liquidity_provide_amount > 0:
+        #                 conversions-=trade.quantity
+        #             else:
+        #                 conversions+=trade.quantity
+        conversions = -state.position.get(product, 0)
         orders: List[Order] = []
         conversion_price_cache = 0
         conversions_cache = 0
@@ -474,9 +507,9 @@ class Trader:
 
         # One side liquidity provide arb
         best_bid, best_bid_amount, best_ask, best_ask_amount = self.get_best_bid_ask(product, estimated_traded_lob)
-        liquidity_provide_sell = ((best_ask - 1) > (foreign_exchange_ask + profit_margin)) and (
+        liquidity_provide_sell = ((best_ask - 1) >= (foreign_exchange_ask + profit_margin)) and (
                 sell_available_position > 0)
-        liquidity_provide_buy = ((best_bid + 1) < (foreign_exchange_bid - profit_margin)) and (
+        liquidity_provide_buy = ((best_bid + 1) <= (foreign_exchange_bid - profit_margin)) and (
                 buy_available_position > 0)
 
         if liquidity_provide_sell and liquidity_provide_buy:
@@ -569,17 +602,30 @@ class Trader:
 
         return orders, ordered_position, estimated_traded_lob
 
+    def r4_coconut_signal(self, traderDataNew, k=1):
+        residual = self.extract_from_cache(traderDataNew, 'COCONUT', 2)
+        std_residual = 1.9403838089139391
+        mean_residual = -0.00014585148302568738
+        if residual[0] - residual[1] > mean_residual + k * std_residual:
+            return 1
+        elif residual[0] - residual[1] < mean_residual - k * std_residual:
+            return -1
+        else:
+            return 0
+
     def run(self, state: TradingState):
         # read in the previous cache
-        # traderDataOld = self.decode_trader_data(state)
-        # # calculate this state cache to avoid duplicate calculation
-        # traderDataNew = self.set_up_cached_trader_data(state, traderDataOld)
-        # print(f"position now:{state.position}")
+        traderDataOld = self.decode_trader_data(state)
+        # calculate this state cache to avoid duplicate calculation
+        traderDataNew = self.set_up_cached_trader_data(state, traderDataOld)
+        print(f"position now:{state.position}")
         ordered_position = {product: 0 for product in products}
         estimated_traded_lob = copy.deepcopy(state.order_depths)
         print("Observations: " + str(state.observations))
-        print('pre_trade_position: ' + str(state.position))
-
+        print("COCONUT Order depths: " + str(state.order_depths['COCONUT'].buy_orders) + str(
+            state.order_depths['COCONUT'].sell_orders))
+        print("COCONUT_COUPON Order depths: " + str(state.order_depths['COCONUT_COUPON'].buy_orders) + str(
+            state.order_depths['COCONUT_COUPON'].sell_orders))
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
@@ -614,56 +660,78 @@ class Trader:
             #         ordered_position,
             #         estimated_traded_lob,
             #         traderDataNew,
-            #         max_limit=70,
+            #         max_limit=5,
             #         profit_margin=1
             #     )
             #
             #     result[product] = arb_orders
             #
             #     print(f"conversions at this time slice: {conversions}")
-            fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, 'GIFT_BASKET')
-            deviation_threshold = 30 / 2  # 25/2
-            if fair_price_deviation > deviation_threshold:
-                predicted_basket_direction = -1
-            elif fair_price_deviation < -deviation_threshold:
-                predicted_basket_direction = 1
-            else:
-                predicted_basket_direction = 0
-            if product == 'GIFT_BASKET':
-                trade_coef = 1
+            # fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, 'GIFT_BASKET')
+            # deviation_threshold = 30 / 2  # 25/2
+            # if fair_price_deviation > deviation_threshold:
+            #     predicted_basket_direction = -1
+            # elif fair_price_deviation < -deviation_threshold:
+            #     predicted_basket_direction = 1
+            # else:
+            #     predicted_basket_direction = 0
+            # print(f'predicted_basket_direction: {predicted_basket_direction}')
+            # if product == 'GIFT_BASKET':
+            #     trade_coef = 1
+            #
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                predicted_basket_direction,
+            #                                                                                trade_coef)
+            #     result[product] = orders
+            # if product == 'CHOCOLATE':
+            #     trade_coef=-1
+            #
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                predicted_basket_direction,
+            #                                                                                trade_coef,)
+            #     result[product] = orders
+            # if product == 'STRAWBERRIES':
+            #     trade_coef = -6
+            #
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                predicted_basket_direction,
+            #                                                                                trade_coef, )
+            #     result[product] = orders
+            # if product == 'ROSES':
+            #     trade_coef = -1
+            #
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                predicted_basket_direction,
+            #                                                                                trade_coef, )
+            #     result[product] = orders
 
+            if product == 'COCONUT':
+                coconut_direction = 0
+                if len(traderDataNew) > 1:
+                    # we have enough data to make prediction
+                    coconut_direction = self.r4_coconut_signal(traderDataNew)
                 orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
                                                                                            ordered_position,
                                                                                            estimated_traded_lob,
-                                                                                           predicted_basket_direction,
-                                                                                           trade_coef)
+                                                                                           coconut_direction, 1)
                 result[product] = orders
-            if product == 'CHOCOLATE':
-                trade_coef = -1
-
+            if product == 'COCONUT_COUPON':
+                coconut_direction = 0
+                if len(traderDataNew) > 1:
+                    # we have enough data to make prediction
+                    coconut_direction = self.r4_coconut_signal(traderDataNew)
                 orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
                                                                                            ordered_position,
                                                                                            estimated_traded_lob,
-                                                                                           predicted_basket_direction,
-                                                                                           trade_coef, )
+                                                                                           coconut_direction, -3)
                 result[product] = orders
-            if product == 'STRAWBERRIES':
-                trade_coef = -1
-
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           predicted_basket_direction,
-                                                                                           trade_coef, )
-                result[product] = orders
-            if product == 'ROSES':
-                trade_coef = -1
-
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           predicted_basket_direction,
-                                                                                           trade_coef, )
-                result[product] = orders
-            conversions = 0
-        return result, conversions, ''
+        conversions = 0
+        return result, conversions, jsonpickle.encode(traderDataNew)

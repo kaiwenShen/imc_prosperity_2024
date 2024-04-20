@@ -1,4 +1,7 @@
 import numpy as np
+from scipy.stats import t
+
+
 def exponential_halflife(length: int, half_life: int) -> np.ndarray:
     """
     exponential halflife decay function of certain lenghth.
@@ -99,7 +102,7 @@ def wls(x, y, w, intercept=False):
         raise "Matrix is singular and cannot be inverted."
 
 
-def ols(x, y, intercept=False):
+def ols(y,x, intercept=False):
     """
     Ordinary least squares regression for multivariate x, including R^2 and residuals.
 
@@ -144,10 +147,28 @@ def ols(x, y, intercept=False):
         SS_res = residuals.T @ residuals
         SS_tot = (y.reshape(-1, 1) - np.mean(y)).T @ (y.reshape(-1, 1) - np.mean(y))
         r_squared = 1 - (SS_res / SS_tot).item()  # Extract scalar value
+
+        # Calculate t-statistics
+        # Degrees of freedom
+        df = len(y) - X.shape[1]
+
+        # Calculate standard errors of coefficients
+        residuals_var = np.sum(residuals ** 2) / df
+        cov_matrix = np.linalg.inv(XTX) * residuals_var
+        se = np.sqrt(np.diag(cov_matrix))
+
+        # Compute t statistics
+        t_stats = beta / se
+
+        # Compute p-values
+        p_values = (1 - t.cdf(np.abs(t_stats), df)) * 2
+
         if intercept:
             return {
                 "coefficients": beta[1:],  # coefficients for predictors
                 "intercept": beta[0],  # intercept
+                "t_stats": t_stats,  # t statistics
+                "p_values": p_values,  # p values
                 "R2": r_squared,  # R^2 value
                 "residuals": residuals.flatten(),  # residuals
             }
