@@ -151,11 +151,11 @@ class Trader:
                           'ORCHIDS': [None, None, None, None, sunlight, humidity, importTariff, exportTariff,
                                       transportFees,
                                       orc_midprice, orc_standford_midprice, orc_majority_vol, orc_imbalance],
-                          'COCONUT': [coupon_best_bid, coupon_best_ask, coconut_residual],
-                          'COCONUT_COUPON': [coconut_coupon_residual]
+                          'COCONUT': [coupon_best_bid, coupon_best_ask, coconut_residual,None],
+                          'COCONUT_COUPON': [coconut_coupon_residual,None]
                           }]
-
         # for ORCHIDS, the first four elements are for pure_arb price, conversion_cache, liquidity provide price, liquidity provide amount
+        # for COCONUT and COCONUT_COUPON, the last element is for last time slice signal direction.
         if state.timestamp == 0:
             return current_cache
         new_cache = copy.deepcopy(
@@ -613,7 +613,8 @@ class Trader:
             print(f"BUY {product} {pos}x {worst_ask}")
             orders.append(order)
             ordered_position = self.update_estimated_position(ordered_position, product, pos, 1)
-
+        elif action == 0:
+            # we clear our position.
         return orders, ordered_position, estimated_traded_lob
 
     def r4_coconut_signal(self, traderDataNew, k=0.5,pct_threshold=0.5):
