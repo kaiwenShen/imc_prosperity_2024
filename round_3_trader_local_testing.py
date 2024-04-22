@@ -536,7 +536,6 @@ class Trader:
                              liquidity_fraction: float = 0.3):
         orders: List[Order] = []
         worst_bid, worst_bid_amount, worst_ask, worst_ask_amount = self.get_worst_bid_ask(product, estimated_traded_lob)
-        best_bid, best_bid_amount, best_ask, best_ask_amount = self.get_best_bid_ask(product, estimated_traded_lob)
         buy_available_position, sell_available_position = self.cal_available_position(product, state, ordered_position)
         logger.print('sell_available_position: ' + str(sell_available_position))
         logger.print('buy_available_position: ' + str(buy_available_position))
@@ -644,6 +643,7 @@ class Trader:
             if product == 'GIFT_BASKET':
                 fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
                 deviation_threshold = 30 / 2  # 25/2
+                logger.print(f"{product}fair_price_deviation: {fair_price_deviation}")
                 orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
                                                                                            ordered_position,
                                                                                            estimated_traded_lob,
@@ -652,42 +652,42 @@ class Trader:
                                                                                            deviation_threshold,
                                                                                            liquidity_fraction=0.3)
                 result[product] = orders
-            if product == 'CHOCOLATE':
-                fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
-                logger.print(f"{product}fair_price_deviation: {fair_price_deviation}")
-                deviation_threshold = 25 / 2
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           -fair_price_deviation,
-                                                                                           fair_price,
-                                                                                           deviation_threshold,
-                                                                                           liquidity_fraction=0.6)
-                result[product] = orders
-            if product == 'STRAWBERRIES':
-                fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
-                logger.print(f"{product}fair_price_deviation: {fair_price_deviation}")
-                deviation_threshold = 10 / 2
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           -fair_price_deviation,
-                                                                                           fair_price,
-                                                                                           deviation_threshold,
-                                                                                           liquidity_fraction=0.2)
-                result[product] = orders
-            if product == 'ROSES':
-                fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
-                logger.print(f"{product}fair_price_deviation: {fair_price_deviation}")
-                deviation_threshold = 20 / 2
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           -fair_price_deviation,
-                                                                                           fair_price,
-                                                                                           deviation_threshold,
-                                                                                           liquidity_fraction=0.3)
-                result[product] = orders
+            # if product == 'CHOCOLATE':
+            #     fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
+            #     logger.print(f"{product}fair_price_deviation: {fair_price_deviation}")
+            #     deviation_threshold = 25 / 2
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                -fair_price_deviation,
+            #                                                                                fair_price,
+            #                                                                                deviation_threshold,
+            #                                                                                liquidity_fraction=0.6)
+            #     result[product] = orders
+            # if product == 'STRAWBERRIES':
+            #     fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
+            #     logger.print(f"{product}fair_price_deviation: {fair_price_deviation}")
+            #     deviation_threshold = 10 / 2
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                -fair_price_deviation,
+            #                                                                                fair_price,
+            #                                                                                deviation_threshold,
+            #                                                                                liquidity_fraction=0.2)
+            #     result[product] = orders
+            # if product == 'ROSES':
+            #     fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, product)
+            #     logger.print(f"{product}fair_price_deviation: {fair_price_deviation}")
+            #     deviation_threshold = 20 / 2
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                -fair_price_deviation,
+            #                                                                                fair_price,
+            #                                                                                deviation_threshold,
+            #                                                                                liquidity_fraction=0.3)
+            #     result[product] = orders
             conversions = 0
         logger.flush(state, result, conversions, '')
         return result, conversions, ''

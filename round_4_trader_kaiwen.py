@@ -86,7 +86,7 @@ class Trader:
         sell_lob = [price for price in order_depth.sell_orders.keys() if order_depth.sell_orders[price] < 0]
         best_bid = max(buy_lob) if buy_lob else 0
         best_ask = min(sell_lob) if sell_lob else 0
-        return best_bid, order_depth.buy_orders[best_bid], best_ask, order_depth.sell_orders[best_ask]
+        return best_bid, order_depth.buy_orders.get(best_bid, 0), best_ask, order_depth.sell_orders.get(best_ask, 0)
 
     @staticmethod
     def get_worst_bid_ask(product, estimated_traded_lob):
@@ -95,7 +95,7 @@ class Trader:
         sell_lob = [price for price in order_depth.sell_orders.keys() if order_depth.sell_orders[price] < 0]
         worst_bid = min(buy_lob) if buy_lob else 0
         worst_ask = max(sell_lob) if sell_lob else 0
-        return worst_bid, order_depth.buy_orders[worst_bid], worst_ask, order_depth.sell_orders[worst_ask]
+        return worst_bid, order_depth.buy_orders.get(worst_bid, 0), worst_ask, order_depth.sell_orders.get(worst_ask, 0)
 
     @staticmethod
     def r4_current_coconut_fair_price(state):
@@ -124,8 +124,9 @@ class Trader:
         y_t = intercept + coef * mid_price_coupon
         residual = (coconut_best_ask + coconut_best_bid) / 2 - y_t
         return best_bid, best_ask, residual
+
     @staticmethod
-    def r4_current_coconut_coupon_fair_price(state,coupon_best_bid, coupon_best_ask,):
+    def r4_current_coconut_coupon_fair_price(state, coupon_best_bid, coupon_best_ask, ):
         order_depth = state.order_depths['COCONUT']
         best_bid = list(order_depth.buy_orders.keys())[0]
         best_ask = list(order_depth.sell_orders.keys())[0]
@@ -135,6 +136,7 @@ class Trader:
         y_t = intercept + coef * mid_price_coconut
         residual = (coupon_best_ask + coupon_best_bid) / 2 - y_t
         return residual
+
     def set_up_cached_trader_data(self, state, traderDataOld):
         # for now we just cache the orderDepth.
         star_midprice = self.calculate_mid_price(state, 'STARFRUIT')
@@ -145,14 +147,14 @@ class Trader:
         orc_imbalance = self.calculate_imbalance(state, 'ORCHIDS')
         sunlight, humidity, importTariff, exportTariff, transportFees = self.get_conversion_obs(state, 'ORCHIDS')
         coupon_best_bid, coupon_best_ask, coconut_residual = self.r4_current_coconut_fair_price(state)
-        coconut_coupon_residual = self.r4_current_coconut_coupon_fair_price(state,coupon_best_bid, coupon_best_ask)
+        coconut_coupon_residual = self.r4_current_coconut_coupon_fair_price(state, coupon_best_bid, coupon_best_ask)
         # cache formulation
         current_cache = [{'STARFRUIT': [star_midprice, star_standford_midprice, star_majority_vol, star_imbalance],
                           'ORCHIDS': [None, None, None, None, sunlight, humidity, importTariff, exportTariff,
                                       transportFees,
                                       orc_midprice, orc_standford_midprice, orc_majority_vol, orc_imbalance],
-                          'COCONUT': [coupon_best_bid, coupon_best_ask, coconut_residual,None],
-                          'COCONUT_COUPON': [coconut_coupon_residual,None]
+                          'COCONUT': [coupon_best_bid, coupon_best_ask, coconut_residual, None],
+                          'COCONUT_COUPON': [coconut_coupon_residual, None]
                           }]
         # for ORCHIDS, the first four elements are for pure_arb price, conversion_cache, liquidity provide price, liquidity provide amount
         # for COCONUT and COCONUT_COUPON, the last element is for last time slice signal direction.
@@ -573,13 +575,13 @@ class Trader:
         return fair_price_deviation, fair_price
 
     def kevin_spread_trading(self, product, state, ordered_position, estimated_traded_lob,
-                             predicted_basket_direction, trade_coef,
-                             liquidity_fraction: float = 0.3, anchor_product='GIFT_BASKET'):
+                             trade_direction, trade_coef, liquidity_fraction: float = 0.3,
+                             anchor_product='GIFT_BASKET'):
         orders: List[Order] = []
         worst_bid, worst_bid_amount, worst_ask, worst_ask_amount = self.get_worst_bid_ask(product, estimated_traded_lob)
-        best_bid, best_bid_amount, best_ask, best_ask_amount = self.get_best_bid_ask(product, estimated_traded_lob)
         buy_available_position, sell_available_position = self.cal_available_position(product, state, ordered_position)
-        # we want to match the basket position
+        print('sell_available_position: ' + str(sell_available_position))
+        print('buy_available_position: ' + str(buy_available_position))
         if product != anchor_product:
             match_position = abs(state.position.get(anchor_product, 0) * trade_coef - state.position.get(product, 0))
         else:
@@ -587,15 +589,11 @@ class Trader:
         buy_available_position = min(buy_available_position,
                                      match_position)  # we want our component to match the ratio of the basket
         sell_available_position = min(sell_available_position, match_position)
-        print('sell_available_position: ' + str(sell_available_position))
-        print('buy_available_position: ' + str(buy_available_position))
-        action = predicted_basket_direction * np.sign(trade_coef)
-        print('action' + str(action))
-        if action < 0 and sell_available_position > 0:
+        action = trade_direction * np.sign(trade_coef)
+        if action == -1 and sell_available_position > 0:
             # we sell at worst bid, anticipating mean reversion
-            # gradually taking position: we take fraction liquidity of the lob
+            # gradually taking position: we take half liquidity of the lob
             liquidity = int(round(sum(estimated_traded_lob[product].buy_orders.values()) * liquidity_fraction))
-            print('liquidity' + str(liquidity))
             pos = min(sell_available_position, liquidity)
             order = Order(product, worst_bid, -pos)
             orders.append(order)
@@ -604,61 +602,59 @@ class Trader:
                                                               -1)
             sell_available_position -= pos
 
-        elif action > 0 and buy_available_position > 0:
+        elif action == 1 and buy_available_position > 0:
             # we buy, anticipating mean reversion
             liquidity = -int(round(sum(estimated_traded_lob[product].sell_orders.values()) * liquidity_fraction))
-            print('liquidity' + str(liquidity))
             pos = min(buy_available_position, liquidity)
+
             order = Order(product, worst_ask, pos)
             print(f"BUY {product} {pos}x {worst_ask}")
             orders.append(order)
             ordered_position = self.update_estimated_position(ordered_position, product, pos, 1)
-        elif action == 0:
-            # we clear our position.
         return orders, ordered_position, estimated_traded_lob
 
-    def r4_coconut_signal(self, traderDataNew, k=0.5,pct_threshold=0.5):
+    def r4_coconut_signal(self, traderDataNew, k=1, momentum_threshold=0.5):
         residual = self.extract_from_cache(traderDataNew, 'COCONUT', 2)
-        residual_diff = np.sign(np.diff(residual))
-        pct_going_up = np.sum(residual_diff == -1) / len(residual_diff)# if sign is negative, it is going up
+        residual_momentum = -np.polyfit(np.arange(len(residual)), residual, 1)[0]
         std_residual = 25.490151318439462
         mean_residual = 1.106915685037772e-12
         threshold = mean_residual + k * std_residual
-        print('coconut threshold ' + str(threshold))
-        print('coconut residual ' + str(residual))
-        if residual[-1] > threshold:
-            if pct_going_up < pct_threshold:
-                return -1
-        elif residual[-1] < -threshold:
-            if 1-pct_going_up < pct_threshold:
-                return 1
+        print(f"coconut residual: {residual[0]}, threshold: {threshold}")
+        print(f'coconut residual momentum: {residual_momentum}')
+        # if residual[0] > threshold:
+        #     if residual_momentum < momentum_threshold:
+        #         return -1
+        #     else:
+        #         return 0
+        # elif residual[0] < -threshold:
+        #     if residual_momentum > -momentum_threshold:
+        #         return 1
+        #     else:
+        #         return 0
+        # else:
+        #     return 0
+        if residual[0] > threshold:
+            return -1, 1 + residual_momentum
+        elif residual[0] < -threshold:
+            return 1, 1 - residual_momentum
         else:
-            if pct_going_up < pct_threshold:
-                return -1
-            elif pct_going_up > 1 - pct_threshold:
-                return 1
-        return 0
-    def r4_coconut_coupon_signal(self, traderDataNew, k=0.5,pct_threshold=0.2):
+            return 0, 1
+
+    def r4_coconut_coupon_signal(self, traderDataNew, k=1, ):
         residual = self.extract_from_cache(traderDataNew, 'COCONUT_COUPON', 0)
-        residual_diff = np.sign(np.diff(residual))
-        pct_going_up = np.sum(residual_diff == -1) / len(residual_diff)# if sign is negative, it is going up
+        residual_momentum = -np.polyfit(np.arange(len(residual)), residual, 1)[0]
         mean_residual = 9.503613303725918e-13
         std_residual = 13.381762301052223
         threshold = mean_residual + k * std_residual
-        print('coconut coupon threshold ' + str(threshold))
-        print('coconut coupon residual ' + str(residual))
-        if residual[-1] > threshold:
-            if pct_going_up < pct_threshold:
-                return -1
-        elif residual[-1] < -threshold:
-            if 1-pct_going_up < pct_threshold:
-                return 1
+        print(f"coconut coupon residual: {residual[0]}, threshold: {threshold}")
+        print(f'coconut coupon residual momentum: {residual_momentum}')
+        if residual[0] > threshold:
+            return -1, 1 + residual_momentum
+        elif residual[0] < -threshold:
+            return 1, 1 - residual_momentum
         else:
-            if pct_going_up < pct_threshold:
-                return -1
-            elif pct_going_up > 1-pct_threshold:
-                return 1
-        return 0
+            return 0, 1
+
     def run(self, state: TradingState):
         # read in the previous cache
         traderDataOld = self.decode_trader_data(state)
@@ -711,78 +707,80 @@ class Trader:
             #     result[product] = arb_orders
             #
             #     print(f"conversions at this time slice: {conversions}")
-            # fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, 'GIFT_BASKET')
-            # deviation_threshold = 30 / 2  # 25/2
-            # if fair_price_deviation > deviation_threshold:
-            #     predicted_basket_direction = -1
-            # elif fair_price_deviation < -deviation_threshold:
-            #     predicted_basket_direction = 1
-            # else:
-            #     predicted_basket_direction = 0
-            # print(f'predicted_basket_direction: {predicted_basket_direction}')
-            # if product == 'GIFT_BASKET':
-            #     trade_coef = 1
-            #
-            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-            #                                                                                ordered_position,
-            #                                                                                estimated_traded_lob,
-            #                                                                                predicted_basket_direction,
-            #                                                                                trade_coef)
-            #     result[product] = orders
-            # if product == 'CHOCOLATE':
-            #     trade_coef=-1
-            #
-            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-            #                                                                                ordered_position,
-            #                                                                                estimated_traded_lob,
-            #                                                                                predicted_basket_direction,
-            #                                                                                trade_coef,)
-            #     result[product] = orders
-            # if product == 'STRAWBERRIES':
-            #     trade_coef = -6
-            #
-            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-            #                                                                                ordered_position,
-            #                                                                                estimated_traded_lob,
-            #                                                                                predicted_basket_direction,
-            #                                                                                trade_coef, )
-            #     result[product] = orders
-            # if product == 'ROSES':
-            #     trade_coef = -1
-            #
-            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-            #                                                                                ordered_position,
-            #                                                                                estimated_traded_lob,
-            #                                                                                predicted_basket_direction,
-            #                                                                                trade_coef, )
-            #     result[product] = orders
+            fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, 'GIFT_BASKET')
+            deviation_threshold = 30 / 2  # 25/2
+            if fair_price_deviation > deviation_threshold:
+                predicted_basket_direction = -1
+            elif fair_price_deviation < -deviation_threshold:
+                predicted_basket_direction = 1
+            else:
+                predicted_basket_direction = 0
+            print(f'predicted_basket_direction: {predicted_basket_direction}')
+            if product == 'GIFT_BASKET':
+                trade_coef = 1
 
-            if product == 'COCONUT':
-                if len(traderDataNew) > 9:
-                    # we have enough data to make prediction
-                    coconut_direction = self.r4_coconut_signal(traderDataNew)
-                else:
-                    coconut_direction = 0
-                print(f"coconut_direction: {coconut_direction}")
                 orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
                                                                                            ordered_position,
                                                                                            estimated_traded_lob,
-                                                                                           coconut_direction, 1,
-                                                                                           anchor_product='COCONUT',
-                                                                                           liquidity_fraction=0.3)
+                                                                                           predicted_basket_direction,
+                                                                                           trade_coef)
                 result[product] = orders
-            if product == 'COCONUT_COUPON':
-                if len(traderDataNew) > 1:
-                    # we have enough data to make prediction
-                    coconut_direction = self.r4_coconut_coupon_signal(traderDataNew)
-                else:
-                    coconut_direction = 0
+            if product == 'CHOCOLATE':
+                trade_coef=-1
+
                 orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
                                                                                            ordered_position,
                                                                                            estimated_traded_lob,
-                                                                                           coconut_direction, 3,
-                                                                                           anchor_product='COCONUT',
-                                                                                           liquidity_fraction=0.3)
+                                                                                           predicted_basket_direction,
+                                                                                           trade_coef,)
                 result[product] = orders
+            if product == 'STRAWBERRIES':
+                trade_coef = -1
+
+                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+                                                                                           ordered_position,
+                                                                                           estimated_traded_lob,
+                                                                                           predicted_basket_direction,
+                                                                                           trade_coef, )
+                result[product] = orders
+            if product == 'ROSES':
+                trade_coef = -1
+
+                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+                                                                                           ordered_position,
+                                                                                           estimated_traded_lob,
+                                                                                           predicted_basket_direction,
+                                                                                           trade_coef, )
+                result[product] = orders
+
+            # if product == 'COCONUT':
+            #     if len(traderDataNew) > 9:
+            #         # we have enough data to make prediction
+            #         coconut_direction, liquidity_multiplier = self.r4_coconut_signal(traderDataNew)
+            #     else:
+            #         coconut_direction, liquidity_multiplier = 0, 1
+            #     print(f"coconut_direction: {coconut_direction}")
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                coconut_direction,
+            #                                                                                1,
+            #                                                                                anchor_product='COCONUT',
+            #                                                                                liquidity_fraction=0.8 * liquidity_multiplier)
+            #     result[product] = orders
+            # if product == 'COCONUT_COUPON':
+            #     if len(traderDataNew) > 9:
+            #         # we have enough data to make prediction
+            #         coconut_coupon_direction, liquidity_multiplier = self.r4_coconut_coupon_signal(traderDataNew)
+            #     else:
+            #         coconut_coupon_direction, liquidity_multiplier = 0, 1
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                coconut_coupon_direction,
+            #                                                                                3,
+            #                                                                                anchor_product='COCONUT',
+            #                                                                                liquidity_fraction=0.8 * liquidity_multiplier)
+            #     result[product] = orders
         conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
