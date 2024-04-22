@@ -1,4 +1,5 @@
 import copy
+import math
 
 import jsonpickle
 import numpy as np
@@ -15,6 +16,14 @@ position_limits = [20, 20, 100, 250, 350, 60, 60, 300, 600]
 
 NUM_OF_DATA_POINT = 10
 
+K = 10000
+T = 248  # the log shows it is day 3
+r = 0
+EWMA_lambda = 0.94
+MAX_ITERATIONS = 100
+PRECISION = 1.0e-8
+INITIAL_GUESS_VOL = 0.01
+
 
 class Trader:
     POSITION_LIMIT = {product: limit for product, limit in zip(products, position_limits)}
@@ -26,7 +35,7 @@ class Trader:
         return jsonpickle.decode(state.traderData)
 
     @staticmethod
-    def extract_from_cache(traderDataNew, product, position):
+    def extract_from_cache(traderDataNew, product, position) -> list:
         """"""
         return [traderDataNew[i][product][position] for i in range(len(traderDataNew))][::-1]
 
@@ -146,15 +155,20 @@ class Trader:
         orc_standford_midprice, orc_majority_vol = self.cal_standford_mid_price_vol(state, 'ORCHIDS')
         orc_imbalance = self.calculate_imbalance(state, 'ORCHIDS')
         sunlight, humidity, importTariff, exportTariff, transportFees = self.get_conversion_obs(state, 'ORCHIDS')
-        coupon_best_bid, coupon_best_ask, coconut_residual = self.r4_current_coconut_fair_price(state)
-        coconut_coupon_residual = self.r4_current_coconut_coupon_fair_price(state, coupon_best_bid, coupon_best_ask)
+        coconut_best_bid, coconut_best_bid_amount, coconut_best_ask, coconut_best_ask_amount = self.get_best_bid_ask(
+            'COCONUT', state.order_depths)
+        coupon_best_bid, coupon_best_bid_amount, coupon_best_ask, coupon_best_ask_amount = self.get_best_bid_ask(
+            'COCONUT_COUPON', state.order_depths)
+        coconut_midprice = (coconut_best_bid + coconut_best_ask) / 2
+        coupon_midprice = (coupon_best_bid + coupon_best_ask) / 2
+        coconut_implied_volatility = self.implied_volatility(coconut_midprice, K, r, coupon_midprice, T, 'call')
+        coconut_delta = self.delta_call(coconut_midprice, K, r, coconut_implied_volatility, T)
         # cache formulation
         current_cache = [{'STARFRUIT': [star_midprice, star_standford_midprice, star_majority_vol, star_imbalance],
                           'ORCHIDS': [None, None, None, None, sunlight, humidity, importTariff, exportTariff,
                                       transportFees,
                                       orc_midprice, orc_standford_midprice, orc_majority_vol, orc_imbalance],
-                          'COCONUT': [coupon_best_bid, coupon_best_ask, coconut_residual, None],
-                          'COCONUT_COUPON': [coconut_coupon_residual, None]
+                          'COCONUT': [coconut_midprice, coconut_delta, coconut_implied_volatility, coupon_midprice],
                           }]
         # for ORCHIDS, the first four elements are for pure_arb price, conversion_cache, liquidity provide price, liquidity provide amount
         # for COCONUT and COCONUT_COUPON, the last element is for last time slice signal direction.
@@ -424,7 +438,7 @@ class Trader:
     def shaoqin_r1_starfruit_pred(self, traderDataNew) -> int:
         coef = [0.18898843, 0.20770677, 0.26106908, 0.34176867]
         intercept = 2.356494353223752
-        X = np.array([traderDataNew[i]['STARFRUIT'][1] for i in range(len(traderDataNew))])[::-1]
+        X = np.array([traderDataNew[i]['STARFRUIT'][1] for i in range(len(traderDataNew))])[:4][::-1]
         return int(round(intercept + np.dot(coef, X)))
 
     def shaoqin_r2_orchids_pred(self, traderDataNew) -> int:
@@ -655,6 +669,305 @@ class Trader:
         else:
             return 0, 1
 
+    @staticmethod
+    def norm_cdf(x):
+        return (1.0 + math.erf(x / np.sqrt(2.0))) / 2.0
+
+    @staticmethod
+    def norm_pdf(x):
+        return np.exp(-x ** 2 / 2.0) / np.sqrt(2.0 * math.pi)
+
+    def delta_call(self, S, K, r, sigma, T):
+        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        return self.norm_cdf(d1)
+
+    def delta_put(self, S, K, r, sigma, T):
+        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        return self.norm_cdf(d1) - 1
+
+    def gamma(self, S, K, r, sigma, T):
+        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        return self.norm_pdf(d1) / (S * sigma * np.sqrt(T))
+
+    def vega(self, S, K, r, sigma, T):
+        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        return S * self.norm_pdf(d1) * np.sqrt(T)
+
+    def Black_Scholes(self, S, K, r, sigma, T, option_type):
+        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+        if option_type == 'call':
+            return S * self.norm_cdf(d1) - K * np.exp(-r * T) * self.norm_cdf(d2)
+        elif option_type == 'put':
+            return K * np.exp(-r * T) * self.norm_cdf(-d2) - S * self.norm_cdf(-d1)
+
+    def implied_volatility(self, S, K, r, price, T, option_type):
+        sigma = INITIAL_GUESS_VOL  # this initial guess matters, large would lead to divergence
+        for i in range(MAX_ITERATIONS):
+            price_est = self.Black_Scholes(S, K, r, sigma, T, option_type)
+            vega_est = self.vega(S, K, r, sigma, T)
+            diff = price_est - price
+            if abs(diff) < PRECISION:
+                return sigma
+            sigma = sigma - diff / vega_est  # Newton-Raphson method
+
+    def ols(self, y, x, intercept=False):
+        """
+        Ordinary least squares regression for multivariate x, including R^2 and residuals.
+
+        Args:
+            x (list of lists or numpy.ndarray): 2D list or array where each inner list or
+            row represents a single observation's features.
+            y (list or numpy.ndarray): Output variable values, one for each observation.
+            intercept (bool): Whether to include an intercept in the model. Default is False.
+        Returns:
+            dict: A dictionary containing coefficients, intercept, R^2, and residuals.
+        """
+        # Convert inputs to numpy arrays if they aren't already
+        x = np.asarray(x)
+        y = np.asarray(y)
+
+        # Ensure x is two-dimensional (for a single predictor case, it should still work)
+        if x.ndim == 1:
+            x = x.reshape(-1, 1)
+
+        if intercept:
+            # Augment x with a column of ones for intercept
+            X = np.hstack([np.ones((len(x), 1)), x])
+        else:
+            X = x
+
+        # Compute X'X and X'Y
+        XTX = X.T @ X
+        XTY = X.T @ y.reshape(-1, 1)
+
+        try:
+            # Solve for beta (coefficients)
+            beta = np.linalg.solve(XTX, XTY)
+            beta = beta.flatten()  # Flatten the array to 1D
+
+            # Calculate fitted values
+            y_fitted = X @ beta.reshape(-1, 1)
+
+            # Calculate residuals
+            residuals = y.reshape(-1, 1) - y_fitted
+
+            # Calculate R^2
+            SS_res = residuals.T @ residuals
+            SS_tot = (y.reshape(-1, 1) - np.mean(y)).T @ (y.reshape(-1, 1) - np.mean(y))
+            r_squared = 1 - (SS_res / SS_tot).item()  # Extract scalar value
+
+            # Calculate t-statistics
+            # Degrees of freedom
+            df = len(y) - X.shape[1]
+
+            # Calculate standard errors of coefficients
+            residuals_var = np.sum(residuals ** 2) / df
+            cov_matrix = np.linalg.inv(XTX) * residuals_var
+            se = np.sqrt(np.diag(cov_matrix))
+
+            # Compute t statistics
+            try:
+                t_stats = beta / se
+            except ZeroDivisionError:
+                print("Standard error is zero.")
+            # Compute p-values
+            # p_values = (1 - t.cdf(np.abs(t_stats), df)) * 2
+
+            if intercept:
+                return {
+                    "coefficients": beta[1:],  # coefficients for predictors
+                    "intercept": beta[0],  # intercept
+                    "t_stats": t_stats,  # t statistics
+                    # "p_values": p_values,  # p values
+                    "R2": r_squared,  # R^2 value
+                    "residuals": residuals.flatten(),  # residuals
+                }
+            else:
+                return {
+                    "coefficients": beta,  # coefficients for predictors
+                    "t_stats": t_stats,  # t statistics
+                    "R2": r_squared,  # R^2 value
+                    "residuals": residuals.flatten(),  # residuals
+                }
+        except np.linalg.LinAlgError:
+            print("Matrix is singular and cannot be inverted.")
+            pass
+
+    def tongfei_predict_iv(self, ivs):
+
+        x = [0] + ivs[:-1]
+        ols_result = self.ols(ivs, x)
+        coef_fitted = ols_result.get('coefficients', 1)
+        return coef_fitted[0] * ivs[0]
+        # coef_fitted = [0.9969]
+        # return np.dot(coef_fitted, ivs[0])
+
+    # @staticmethod
+    # def tongfei_predict_iv(ivs):
+    #     coef_fitted = [0.9245, 0.0726]
+    #     return np.dot(coef_fitted, ivs[:2])
+    #     # coef_fitted = [0.9969]
+    #     # return np.dot(coef_fitted, ivs[0])
+
+    def tongfei_calculate_fair_price(self, product, state, ordered_position, estimated_traded_lob, latest_coconut_price,
+                                     predicted_iv):
+        # make latest coconut price a default value incase coconut coupon shows before coconut in the order book
+        best_bid, best_bid_amount, best_ask, best_ask_amount = self.get_best_bid_ask(product, estimated_traded_lob)
+        mid_price = (best_bid + best_ask) / 2
+        fair_price = self.Black_Scholes(latest_coconut_price, K, r, predicted_iv, T, 'call')
+        print(f"fair_price: {fair_price}, mid_price: {mid_price}")
+        # one standard deviation
+        if mid_price > fair_price + 0.5:
+            # the price is considered overvalued
+            return -1
+        elif mid_price < fair_price - 0.5:
+            # the price is considered undervalued
+            return 1
+        else:
+            return 0
+
+    def tongfei_BS_trade(self, product_list, state, ordered_position, estimated_traded_lob, trade_coef, previous_delta,
+                         predicted_iv, current_iv):
+        orders_coupon: List[Order] = []
+        orders_coconut: List[Order] = []
+        buy_available_position_coconut, sell_available_position_coconut = self.cal_available_position(product_list[0],
+                                                                                                      state,
+                                                                                                      ordered_position)
+        buy_available_position_coupon, sell_available_position_coupon = self.cal_available_position(product_list[1],
+                                                                                                    state,
+                                                                                                    ordered_position)
+        best_bid_coconut, best_bid_coconut_amount, best_ask_coconut, best_ask_coconut_amount = self.get_best_bid_ask(
+            product_list[0], estimated_traded_lob)
+        mid_price_coconut = (best_bid_coconut + best_ask_coconut) / 2
+        best_bid_coupon, best_bid_coupon_amount, best_ask_coupon, best_ask_coupon_amount = self.get_best_bid_ask(
+            product_list[1], estimated_traded_lob)
+        print(f"predicted_iv is: {predicted_iv}, real vol is: {current_iv}")
+        delta = self.delta_call(mid_price_coconut, K, r, current_iv, T)
+        if trade_coef == 1:
+            # we buy option (coupon), sell coconut, C - S to create a put using put call parity
+            if buy_available_position_coupon > 0 and sell_available_position_coconut > 0:
+                # we can buy at best ask
+                order_coupon, buy_available_position_coupon, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                    product_list[1],
+                    best_ask_coupon,
+                    int(round(best_ask_coupon_amount*0.5)),
+                    buy_available_position_coupon, 1,
+                    ordered_position, estimated_traded_lob)
+                orders_coupon += order_coupon
+                # we do delta hedge on new bought coupon
+                delta_hedge_amount = int(np.round(delta * order_coupon[0].quantity))
+                # market_take function consider the case when the amount is larger than the available position
+                order_coconut, sell_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                    product_list[0],
+                    best_bid_coconut,
+                    delta_hedge_amount,
+                    sell_available_position_coconut, -1,
+                    ordered_position, estimated_traded_lob)
+                orders_coconut += order_coconut
+            else:
+                # we do dynamic delta heding
+                current_coconut_amount = state.position.get(product_list[1], 0)
+                updated_delta_hedge_amount = int(
+                    np.round(np.abs(previous_delta - delta) * np.abs(current_coconut_amount)))
+                if previous_delta - delta > 0:
+                    # delta decreased, we buy back some coconut to the latest decreased delta
+                    order_coconut, buy_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                        product_list[0],
+                        best_ask_coconut,
+                        updated_delta_hedge_amount,
+                        buy_available_position_coconut, 1,
+                        ordered_position, estimated_traded_lob)
+                    orders_coconut += order_coconut
+                elif previous_delta - delta < 0:
+                    # delta increased, we sell more coconut to the latest increased delta
+                    order_coconut, sell_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                        product_list[0],
+                        best_bid_coconut,
+                        updated_delta_hedge_amount,
+                        sell_available_position_coconut, -1,
+                        ordered_position, estimated_traded_lob)
+                    orders_coconut += order_coconut
+                else:
+                    # delta remains the same, no need to do anything
+                    pass
+
+        elif trade_coef == -1:
+            # we sell option (coupon), buy coconut, we only do this trade when both available position are positive
+            if sell_available_position_coupon > 0 and buy_available_position_coconut > 0:
+                # we can sell at best bid
+                order_coupon, sell_available_position_coupon, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                    product_list[1],
+                    best_bid_coupon,
+                    int(round(best_bid_coupon_amount*0.5)),
+                    sell_available_position_coupon, -1,
+                    ordered_position, estimated_traded_lob)
+                orders_coupon += order_coupon
+                # we do delta hedge on new bought coupon
+                delta_hedge_amount = int(np.round(delta * order_coupon[0].quantity))
+
+                order_coconut, buy_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                    product_list[0],
+                    best_ask_coconut,
+                    delta_hedge_amount,
+                    buy_available_position_coconut, 1,
+                    ordered_position, estimated_traded_lob)
+
+                orders_coconut += order_coconut
+            else:
+                # we do dynamic delta heding
+                current_coconut_amount = state.position.get(product_list[1], 0)
+                updated_delta_hedge_amount = int(
+                    np.round(np.abs(previous_delta - delta) * np.abs(current_coconut_amount)))
+                if previous_delta - delta > 0:
+                    # delta decreased, we buy back some coconut to the latest decreased delta
+                    order_coconut, buy_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                        product_list[0],
+                        best_ask_coconut,
+                        updated_delta_hedge_amount,
+                        buy_available_position_coconut, 1,
+                        ordered_position, estimated_traded_lob)
+                    orders_coconut += order_coconut
+                elif previous_delta - delta < 0:
+                    # delta increased, we sell more coconut to the latest increased delta
+                    order_coconut, sell_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                        product_list[0],
+                        best_bid_coconut,
+                        updated_delta_hedge_amount,
+                        sell_available_position_coconut, -1,
+                        ordered_position, estimated_traded_lob)
+                    orders_coconut += order_coconut
+                else:
+                    # delta remains the same, no need to do anything
+                    pass
+        else:
+            # we do dynamic delta hedging to profit from gamma scalping
+            current_coconut_amount = state.position.get(product_list[1], 0)
+            updated_delta_hedge_amount = int(np.round(np.abs(previous_delta - delta) * np.abs(current_coconut_amount)))
+            if previous_delta - delta > 0:
+                # delta decreased, we buy back some coconut to the latest decreased delta
+                order_coconut, buy_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                    product_list[0],
+                    best_ask_coconut,
+                    updated_delta_hedge_amount,
+                    buy_available_position_coconut, 1,
+                    ordered_position, estimated_traded_lob)
+                orders_coconut += order_coconut
+            elif previous_delta - delta < 0:
+                # delta increased, we sell more coconut to the latest increased delta
+                order_coconut, sell_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                    product_list[0],
+                    best_bid_coconut,
+                    updated_delta_hedge_amount,
+                    sell_available_position_coconut, -1,
+                    ordered_position, estimated_traded_lob)
+                orders_coconut += order_coconut
+            else:
+                # delta remains the same, no need to do anything
+                pass
+        print(f"Delta is {delta}, previous delta is {previous_delta}")
+        return orders_coupon, orders_coconut, ordered_position, estimated_traded_lob
+
     def run(self, state: TradingState):
         # read in the previous cache
         traderDataOld = self.decode_trader_data(state)
@@ -669,44 +982,44 @@ class Trader:
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            # if product == 'AMETHYSTS':
-            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
-            #         10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
-            #     # result[product] = liquidity_take_order
-            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-            #                                                                                         state,
-            #                                                                                         ordered_position,
-            #                                                                                         estimated_traded_lob)
-            #     result[product] = liquidity_take_order + mm_order
-            #     # pnl = 3.5k
-            # #
-            # if product == 'STARFRUIT':
-            #     if len(traderDataNew) == NUM_OF_DATA_POINT:
-            #         # we have enough data to make prediction
-            #         predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
-            #         print(f"Predicted price: {predicted_price}")
-            #         # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
-            #         #                                                                                  ordered_position,
-            #         #                                                                                  estimated_traded_lob)
-            #         hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
-            #                                                                                   product, state,
-            #                                                                                   ordered_position,
-            #                                                                                   estimated_traded_lob,
-            #                                                                                   acceptable_range=2)
-            #         result[product] = hft_orders
-            # if product == 'ORCHIDS':
-            #     conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
-            #         product, state,
-            #         ordered_position,
-            #         estimated_traded_lob,
-            #         traderDataNew,
-            #         max_limit=5,
-            #         profit_margin=1
-            #     )
+            if product == 'AMETHYSTS':
+                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
+                    10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
+                # result[product] = liquidity_take_order
+                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+                                                                                                    state,
+                                                                                                    ordered_position,
+                                                                                                    estimated_traded_lob)
+                result[product] = liquidity_take_order + mm_order
+                # pnl = 3.5k
             #
-            #     result[product] = arb_orders
-            #
-            #     print(f"conversions at this time slice: {conversions}")
+            if product == 'STARFRUIT':
+                if len(traderDataNew) == NUM_OF_DATA_POINT:
+                    # we have enough data to make prediction
+                    predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
+                    print(f"Predicted price: {predicted_price}")
+                    # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
+                    #                                                                                  ordered_position,
+                    #                                                                                  estimated_traded_lob)
+                    hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
+                                                                                              product, state,
+                                                                                              ordered_position,
+                                                                                              estimated_traded_lob,
+                                                                                              acceptable_range=2)
+                    result[product] = hft_orders
+            if product == 'ORCHIDS':
+                conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
+                    product, state,
+                    ordered_position,
+                    estimated_traded_lob,
+                    traderDataNew,
+                    max_limit=5,
+                    profit_margin=1
+                )
+
+                result[product] = arb_orders
+
+                print(f"conversions at this time slice: {conversions}")
             fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, 'GIFT_BASKET')
             deviation_threshold = 30 / 2  # 25/2
             if fair_price_deviation > deviation_threshold:
@@ -715,9 +1028,9 @@ class Trader:
                 predicted_basket_direction = 1
             else:
                 predicted_basket_direction = 0
-            print(f'predicted_basket_direction: {predicted_basket_direction}')
             if product == 'GIFT_BASKET':
                 trade_coef = 1
+                print(f'predicted_basket_direction: {predicted_basket_direction}')
 
                 orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
                                                                                            ordered_position,
@@ -726,13 +1039,13 @@ class Trader:
                                                                                            trade_coef)
                 result[product] = orders
             if product == 'CHOCOLATE':
-                trade_coef=-1
+                trade_coef = -1
 
                 orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
                                                                                            ordered_position,
                                                                                            estimated_traded_lob,
                                                                                            predicted_basket_direction,
-                                                                                           trade_coef,)
+                                                                                           trade_coef, )
                 result[product] = orders
             if product == 'STRAWBERRIES':
                 trade_coef = -1
@@ -753,34 +1066,30 @@ class Trader:
                                                                                            trade_coef, )
                 result[product] = orders
 
-            # if product == 'COCONUT':
-            #     if len(traderDataNew) > 9:
-            #         # we have enough data to make prediction
-            #         coconut_direction, liquidity_multiplier = self.r4_coconut_signal(traderDataNew)
-            #     else:
-            #         coconut_direction, liquidity_multiplier = 0, 1
-            #     print(f"coconut_direction: {coconut_direction}")
-            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-            #                                                                                ordered_position,
-            #                                                                                estimated_traded_lob,
-            #                                                                                coconut_direction,
-            #                                                                                1,
-            #                                                                                anchor_product='COCONUT',
-            #                                                                                liquidity_fraction=0.8 * liquidity_multiplier)
-            #     result[product] = orders
-            # if product == 'COCONUT_COUPON':
-            #     if len(traderDataNew) > 9:
-            #         # we have enough data to make prediction
-            #         coconut_coupon_direction, liquidity_multiplier = self.r4_coconut_coupon_signal(traderDataNew)
-            #     else:
-            #         coconut_coupon_direction, liquidity_multiplier = 0, 1
-            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-            #                                                                                ordered_position,
-            #                                                                                estimated_traded_lob,
-            #                                                                                coconut_coupon_direction,
-            #                                                                                3,
-            #                                                                                anchor_product='COCONUT',
-            #                                                                                liquidity_fraction=0.8 * liquidity_multiplier)
-            #     result[product] = orders
-        conversions = 0
+            if product == "COCONUT_COUPON":
+                deltas = self.extract_from_cache(traderDataNew, 'COCONUT',
+                                                 1)  # 0 is the current value, 1 is the previous value
+                ivs = self.extract_from_cache(traderDataNew, 'COCONUT', 2)
+                coconut_mid_prices = self.extract_from_cache(traderDataNew, 'COCONUT', 0)
+                if len(deltas) < 9:
+                    previous_delta = deltas[0]
+                    predicted_iv = ivs[0]
+                else:
+                    current_hedged_delta = self.delta_call(coconut_mid_prices[0], K, r, ivs[0], T) * state.position.get(
+                        "COCONUT_COUPON", 0) + \
+                                           state.position.get("COCONUT", 0)
+                    print(f"The current position delta is {current_hedged_delta}")
+                    previous_delta = deltas[1]
+                    predicted_iv = self.tongfei_predict_iv(ivs)
+                trade_coef = self.tongfei_calculate_fair_price(product, state, ordered_position, estimated_traded_lob,
+                                                               coconut_mid_prices[0],
+                                                               predicted_iv=predicted_iv)
+                product_list = ["COCONUT", "COCONUT_COUPON"]
+                orders_coupon, orders_coconut, ordered_position, estimated_traded_lob = self.tongfei_BS_trade(
+                    product_list, state, ordered_position,
+                    estimated_traded_lob, trade_coef, previous_delta,
+                    predicted_iv=predicted_iv, current_iv=ivs[0])
+                result[product_list[0]] = orders_coconut
+                result[product_list[1]] = orders_coupon
+        # conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)

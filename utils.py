@@ -161,20 +161,22 @@ def ols(y,x, intercept=False):
         t_stats = beta / se
 
         # Compute p-values
-        p_values = (1 - t.cdf(np.abs(t_stats), df)) * 2
+        # p_values = (1 - t.cdf(np.abs(t_stats), df)) * 2
 
         if intercept:
             return {
                 "coefficients": beta[1:],  # coefficients for predictors
                 "intercept": beta[0],  # intercept
                 "t_stats": t_stats,  # t statistics
-                "p_values": p_values,  # p values
+                # "p_values": p_values,  # p values
                 "R2": r_squared,  # R^2 value
                 "residuals": residuals.flatten(),  # residuals
             }
         else:
             return {
                 "coefficients": beta,  # coefficients for predictors
+                "t_stats": t_stats,  # t statistics
+                # "p_values": p_values,  # p values
                 "R2": r_squared,  # R^2 value
                 "residuals": residuals.flatten(),  # residuals
             }
