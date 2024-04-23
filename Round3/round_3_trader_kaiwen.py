@@ -627,7 +627,7 @@ class Trader:
             #     conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
             #         product, state,
             #         ordered_position,
-            #         estimated_traded_lob,
+            #         estimated_traded_lob,shi
             #         traderDataNew,
             #         max_limit=70,
             #         profit_margin=1

@@ -982,89 +982,89 @@ class Trader:
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            if product == 'AMETHYSTS':
-                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
-                    10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
-                # result[product] = liquidity_take_order
-                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-                                                                                                    state,
-                                                                                                    ordered_position,
-                                                                                                    estimated_traded_lob)
-                result[product] = liquidity_take_order + mm_order
-                # pnl = 3.5k
+            # if product == 'AMETHYSTS':
+            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
+            #         10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
+            #     # result[product] = liquidity_take_order
+            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+            #                                                                                         state,
+            #                                                                                         ordered_position,
+            #                                                                                         estimated_traded_lob)
+            #     result[product] = liquidity_take_order + mm_order
+            #     # pnl = 3.5k
+            # #
+            # if product == 'STARFRUIT':
+            #     if len(traderDataNew) == NUM_OF_DATA_POINT:
+            #         # we have enough data to make prediction
+            #         predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
+            #         print(f"Predicted price: {predicted_price}")
+            #         # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
+            #         #                                                                                  ordered_position,
+            #         #                                                                                  estimated_traded_lob)
+            #         hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
+            #                                                                                   product, state,
+            #                                                                                   ordered_position,
+            #                                                                                   estimated_traded_lob,
+            #                                                                                   acceptable_range=2)
+            #         result[product] = hft_orders
+            # if product == 'ORCHIDS':
+            #     conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
+            #         product, state,
+            #         ordered_position,
+            #         estimated_traded_lob,
+            #         traderDataNew,
+            #         max_limit=5,
+            #         profit_margin=1
+            #     )
             #
-            if product == 'STARFRUIT':
-                if len(traderDataNew) == NUM_OF_DATA_POINT:
-                    # we have enough data to make prediction
-                    predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
-                    print(f"Predicted price: {predicted_price}")
-                    # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
-                    #                                                                                  ordered_position,
-                    #                                                                                  estimated_traded_lob)
-                    hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
-                                                                                              product, state,
-                                                                                              ordered_position,
-                                                                                              estimated_traded_lob,
-                                                                                              acceptable_range=2)
-                    result[product] = hft_orders
-            if product == 'ORCHIDS':
-                conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
-                    product, state,
-                    ordered_position,
-                    estimated_traded_lob,
-                    traderDataNew,
-                    max_limit=5,
-                    profit_margin=1
-                )
-
-                result[product] = arb_orders
-
-                print(f"conversions at this time slice: {conversions}")
-            fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, 'GIFT_BASKET')
-            deviation_threshold = 30 / 2  # 25/2
-            if fair_price_deviation > deviation_threshold:
-                predicted_basket_direction = -1
-            elif fair_price_deviation < -deviation_threshold:
-                predicted_basket_direction = 1
-            else:
-                predicted_basket_direction = 0
-            if product == 'GIFT_BASKET':
-                trade_coef = 1
-                print(f'predicted_basket_direction: {predicted_basket_direction}')
-
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           predicted_basket_direction,
-                                                                                           trade_coef)
-                result[product] = orders
-            if product == 'CHOCOLATE':
-                trade_coef = -1
-
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           predicted_basket_direction,
-                                                                                           trade_coef, )
-                result[product] = orders
-            if product == 'STRAWBERRIES':
-                trade_coef = -1
-
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           predicted_basket_direction,
-                                                                                           trade_coef, )
-                result[product] = orders
-            if product == 'ROSES':
-                trade_coef = -1
-
-                orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
-                                                                                           ordered_position,
-                                                                                           estimated_traded_lob,
-                                                                                           predicted_basket_direction,
-                                                                                           trade_coef, )
-                result[product] = orders
+            #     result[product] = arb_orders
+            #
+            #     print(f"conversions at this time slice: {conversions}")
+            # fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, 'GIFT_BASKET')
+            # deviation_threshold = 30 / 2  # 25/2
+            # if fair_price_deviation > deviation_threshold:
+            #     predicted_basket_direction = -1
+            # elif fair_price_deviation < -deviation_threshold:
+            #     predicted_basket_direction = 1
+            # else:
+            #     predicted_basket_direction = 0
+            # if product == 'GIFT_BASKET':
+            #     trade_coef = 1
+            #     print(f'predicted_basket_direction: {predicted_basket_direction}')
+            #
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                predicted_basket_direction,
+            #                                                                                trade_coef)
+            #     result[product] = orders
+            # if product == 'CHOCOLATE':
+            #     trade_coef = -4
+            #
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                predicted_basket_direction,
+            #                                                                                trade_coef, )
+            #     result[product] = orders
+            # if product == 'STRAWBERRIES':
+            #     trade_coef = -6
+            #
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                predicted_basket_direction,
+            #                                                                                trade_coef, )
+            #     result[product] = orders
+            # if product == 'ROSES':
+            #     trade_coef = -1
+            #
+            #     orders, ordered_position, estimated_traded_lob = self.kevin_spread_trading(product, state,
+            #                                                                                ordered_position,
+            #                                                                                estimated_traded_lob,
+            #                                                                                predicted_basket_direction,
+            #                                                                                trade_coef, )
+            #     result[product] = orders
 
             if product == "COCONUT_COUPON":
                 deltas = self.extract_from_cache(traderDataNew, 'COCONUT',
@@ -1091,5 +1091,5 @@ class Trader:
                     predicted_iv=predicted_iv, current_iv=ivs[0])
                 result[product_list[0]] = orders_coconut
                 result[product_list[1]] = orders_coupon
-        # conversions = 0
+        conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
