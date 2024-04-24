@@ -153,7 +153,7 @@ class Trader:
                 return True
         return False
 
-    def rhianna_trade(self, state, product, traderDataOld):
+    def rhianna_trade_record(self, state, product, traderDataOld):
         empty_trade = Trade(product, 0, 0, '', '', 0)
         stored_trade = self.extract_from_cache(traderDataOld, product, -1)
         mkt_trade = state.market_trades.get(product, [])
@@ -207,9 +207,9 @@ class Trader:
         coupon_midprice = (coupon_best_bid + coupon_best_ask) / 2
         coconut_implied_volatility = self.implied_volatility(coconut_midprice, K, r, coupon_midprice, T, 'call')
         coconut_delta = self.delta_call(coconut_midprice, K, r, coconut_implied_volatility, T)
-        coconut_r_trade = self.rhianna_trade(state, 'COCONUT', traderDataOld)
-        gift_r_trade = self.rhianna_trade(state, 'GIFT_BASKET', traderDataOld)
-        rose_r_trade = self.rhianna_trade(state, 'ROSES', traderDataOld)
+        coconut_r_trade = self.rhianna_trade_record(state, 'COCONUT', traderDataOld)
+        gift_r_trade = self.rhianna_trade_record(state, 'GIFT_BASKET', traderDataOld)
+        rose_r_trade = self.rhianna_trade_record(state, 'ROSES', traderDataOld)
         # cache formulation
         current_cache = [{'STARFRUIT': [star_midprice, star_standford_midprice, star_majority_vol, star_imbalance],
                           'ORCHIDS': [None, None, None, None, sunlight, humidity, importTariff, exportTariff,
@@ -255,6 +255,9 @@ class Trader:
             print("BUY", product, str(amount) + "x", price)
             ordered_position = self.update_estimated_position(ordered_position, product, amount, side)
             available_amount -= amount
+            # sort by key from small to large
+            estimated_traded_lob[product].sell_orders = dict(
+                sorted(estimated_traded_lob[product].sell_orders.items(), key=lambda x: x[0]))
             return [Order(product, price, amount)], available_amount, estimated_traded_lob, ordered_position
         else:
             # we sell the product
@@ -267,6 +270,9 @@ class Trader:
             print("SELL", product, str(amount) + "x", price)
             ordered_position = self.update_estimated_position(ordered_position, product, amount, side)
             available_amount -= amount
+            # sort by key from large to small
+            estimated_traded_lob[product].buy_orders = dict(
+                sorted(estimated_traded_lob[product].buy_orders.items(), key=lambda x: x[0], reverse=True))
             return [Order(product, price, -amount)], available_amount, estimated_traded_lob, ordered_position
 
     def kevin_acceptable_price_wtb_liquidity_take(self, acceptable_price, product, state, ordered_position,
@@ -1050,6 +1056,68 @@ class Trader:
             return 0, 0
         return trades[0].quantity if trades[0].buyer == 'Rhianna' else -trades[0].quantity, trades[0].price
 
+    @staticmethod
+    def exponential_halflife(length: int, half_life: int) -> np.ndarray:
+        """
+        exponential halflife decay function of certain lenghth.
+        Args:
+            length: length of the decay
+            half_life: half life of the decay
+        Returns:
+            np.ndarray: exponential decay function. it will start with small values and end with 1
+        """
+        return np.exp(-np.log(2) / half_life * np.arange(length))[::-1]
+
+    def mt_mm_following_rhianna(self, state, product, direction, price, quota, estimated_traded_lob, ordered_position):
+        orders :List[Order]= []
+        buy_available_position_coconut, sell_available_position_coconut = self.cal_available_position(
+            product, state, ordered_position)
+        rhianna_quota = 100
+        buy_available_position_coconut = min(buy_available_position_coconut, rhianna_quota)
+        sell_available_position_coconut = min(sell_available_position_coconut, rhianna_quota)
+        if direction == 1:
+            # we follow rhianna to buy, but we only take the best ask if the best ask is less than or equal to the vwap
+            if buy_available_position_coconut > 0:
+                best_bid, _, best_ask, best_ask_amount = self.get_best_bid_ask(product,
+                                                                               estimated_traded_lob)
+                if best_ask <= price:
+                    # we market take the best ask
+                    order, buy_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                        product,
+                        best_ask,
+                        best_ask_amount,
+                        buy_available_position_coconut, 1,
+                        ordered_position, estimated_traded_lob)
+                    print(f"Rhianna following BUY {product} {best_ask}x {best_ask_amount}")
+                    orders += order
+                elif best_bid < price:
+                    # we market make at best bid+1
+                    order = Order(product, best_bid + 1, buy_available_position_coconut)
+                    orders += [order]
+                    print(
+                        f"Rhianna following LIMIT BUY {product} {best_bid + 1}x {buy_available_position_coconut}")
+        elif direction == -1:
+            # we follow rhianna to sell, but we only sell the best bid if the best bid is greater than or equal to the vwap
+            if sell_available_position_coconut > 0:
+                best_bid, best_bid_amount, best_ask, _ = self.get_best_bid_ask(product,
+                                                                               estimated_traded_lob)
+                if best_bid >= price:
+                    # we market take the best bid
+                    order, sell_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
+                        product,
+                        best_bid,
+                        best_bid_amount,
+                        sell_available_position_coconut, -1,
+                        ordered_position, estimated_traded_lob)
+                    print(f"Rhianna following SELL {product} {best_bid}x {best_bid_amount}")
+                    orders += order
+                elif best_ask > price:
+                    # we market make at best ask-1
+                    order = Order(product, best_ask - 1, sell_available_position_coconut)
+                    orders += [order]
+                    print(
+                        f"Rhianna following LIMIT SELL {product} {best_ask - 1}x {sell_available_position_coconut}")
+
     def run(self, state: TradingState):
         # read in the previous cache
         traderDataOld = self.decode_trader_data(state)
@@ -1174,16 +1242,20 @@ class Trader:
                 result[product_list[0]] = orders_coconut
                 result[product_list[1]] = orders_coupon
                 # follow Rhianna COCONUT
-                buy_available_position_coconut, sell_available_position_coconut = self.cal_available_position(
-                    product_list[0], state, ordered_position)
                 if len(traderDataNew) > 5:
-                    vwap_direction, r_vwap = self.r_vwap_adaptor(traderDataNew, 'COCONUT')
-                    latest_direction, vol = self.r_latest_adaptor(traderDataNew,'COCONUT')
-                    print(f'Rhianna direction: {vwap_direction}, r_vwap: {r_vwap}')
-                    if vwap_direction != trade_coef and vwap_direction*trade_coef != 0:
-                        print(f'conflict with delta hedge: rhianna vwap:{vwap_direction} delta_hedge: {trade_coef}')
-                    if latest_direction != trade_coef and latest_direction*trade_coef != 0:
-                        print(f'conflict with delta hedge: rhianna latest:{latest_direction} delta_hedge: {trade_coef}')
 
+                    vwap_direction, r_vwap = self.r_vwap_adaptor(traderDataNew, 'COCONUT')
+                    # latest_direction, r_price = self.r_latest_adaptor(traderDataNew,'COCONUT')
+                    print(f'Rhianna direction: {vwap_direction}, r_vwap: {r_vwap}')
+                    rhianna_coconut_quota = 100
+                    orders_r_coconut = self.mt_mm_following_rhianna(state, product, vwap_direction, r_vwap,
+                                                                    rhianna_coconut_quota, estimated_traded_lob,
+                                                                    ordered_position)
+                    if vwap_direction != trade_coef and vwap_direction * trade_coef != 0:
+                        print(
+                            f'conflict with delta hedge: rhianna vwap:{vwap_direction} delta_hedge: {trade_coef}, we omit the delta hedge')
+                        result[product_list[0]] = orders_r_coconut
+                    else:
+                        result[product_list[0]] += orders_r_coconut
         conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
