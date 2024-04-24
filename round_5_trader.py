@@ -1069,12 +1069,11 @@ class Trader:
         return np.exp(-np.log(2) / half_life * np.arange(length))[::-1]
 
     def mt_mm_following_rhianna(self, state, product, direction, price, quota, estimated_traded_lob, ordered_position):
-        orders :List[Order]= []
+        orders: List[Order] = []
         buy_available_position_coconut, sell_available_position_coconut = self.cal_available_position(
             product, state, ordered_position)
-        rhianna_quota = 100
-        buy_available_position_coconut = min(buy_available_position_coconut, rhianna_quota)
-        sell_available_position_coconut = min(sell_available_position_coconut, rhianna_quota)
+        buy_available_position_coconut = min(buy_available_position_coconut, quota)
+        sell_available_position_coconut = min(sell_available_position_coconut, quota)
         if direction == 1:
             # we follow rhianna to buy, but we only take the best ask if the best ask is less than or equal to the vwap
             if buy_available_position_coconut > 0:
@@ -1096,6 +1095,9 @@ class Trader:
                     orders += [order]
                     print(
                         f"Rhianna following LIMIT BUY {product} {best_bid + 1}x {buy_available_position_coconut}")
+                    estimated_traded_lob[product].buy_orders[best_bid + 1] = buy_available_position_coconut
+                    ordered_position = self.update_estimated_position(ordered_position, product,
+                                                                      buy_available_position_coconut, 1)
         elif direction == -1:
             # we follow rhianna to sell, but we only sell the best bid if the best bid is greater than or equal to the vwap
             if sell_available_position_coconut > 0:
@@ -1117,6 +1119,10 @@ class Trader:
                     orders += [order]
                     print(
                         f"Rhianna following LIMIT SELL {product} {best_ask - 1}x {sell_available_position_coconut}")
+                    estimated_traded_lob[product].sell_orders[best_ask - 1] = sell_available_position_coconut
+                    ordered_position = self.update_estimated_position(ordered_position, product,
+                                                                      sell_available_position_coconut, -1)
+        return orders, ordered_position, estimated_traded_lob
 
     def run(self, state: TradingState):
         # read in the previous cache
@@ -1126,8 +1132,8 @@ class Trader:
         print(f"position now:{state.position}")
         ordered_position = {product: 0 for product in products}
         estimated_traded_lob = copy.deepcopy(state.order_depths)
-        print("Observations: " + str(state.observations))
-        print('pre_trade_position: ' + str(state.position))
+        print(
+            f'COCONUT LOB buy:{estimated_traded_lob["COCONUT"].buy_orders} sell:{estimated_traded_lob["COCONUT"].sell_orders}')
 
         # Orders to be placed on exchange matching engine
         result = {}
@@ -1248,9 +1254,13 @@ class Trader:
                     # latest_direction, r_price = self.r_latest_adaptor(traderDataNew,'COCONUT')
                     print(f'Rhianna direction: {vwap_direction}, r_vwap: {r_vwap}')
                     rhianna_coconut_quota = 100
-                    orders_r_coconut = self.mt_mm_following_rhianna(state, product, vwap_direction, r_vwap,
-                                                                    rhianna_coconut_quota, estimated_traded_lob,
-                                                                    ordered_position)
+                    orders_r_coconut, ordered_position, estimated_traded_lob = self.mt_mm_following_rhianna(state,
+                                                                                                            product_list[0],
+                                                                                                            vwap_direction,
+                                                                                                            r_vwap,
+                                                                                                            rhianna_coconut_quota,
+                                                                                                            estimated_traded_lob,
+                                                                                                            ordered_position)
                     if vwap_direction != trade_coef and vwap_direction * trade_coef != 0:
                         print(
                             f'conflict with delta hedge: rhianna vwap:{vwap_direction} delta_hedge: {trade_coef}, we omit the delta hedge')
