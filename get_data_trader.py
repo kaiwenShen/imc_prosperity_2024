@@ -12,7 +12,7 @@ class Trader:
 
         # It will be delivered as TradingState.traderData on next execution.
 
-        print(jsonpickle.encode(state))
+        print(state.market_trades)
 
         traderData = ""
         # Sample conversion request. Check more details below.
