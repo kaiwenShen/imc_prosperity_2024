@@ -9,8 +9,7 @@ import string
 
 products = ['AMETHYSTS', 'STARFRUIT']
 
-max_date_back_retrieved = 101 # TODO: under exploration, indetermined
-
+max_date_back_retrieved = 101
 position_limits = [20, 20]
 
 
