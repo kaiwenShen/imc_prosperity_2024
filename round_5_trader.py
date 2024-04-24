@@ -1180,9 +1180,9 @@ class Trader:
                     vwap_direction, r_vwap = self.coconut_r_vwap_adaptor(traderDataNew)
                     latest_direction, vol = self.coconut_r_latest_adaptor(traderDataNew)
                     print(f'Rhianna direction: {vwap_direction}, r_vwap: {r_vwap}')
-                    if vwap_direction != trade_coef and vwap_direction != 0:
+                    if vwap_direction != trade_coef and vwap_direction+trade_coef != 0:
                         print(f'conflict with delta hedge: rhianna vwap:{vwap_direction} delta_hedge: {trade_coef}')
-                    if latest_direction != trade_coef and latest_direction != 0:
+                    if latest_direction != trade_coef and latest_direction+trade_coef != 0:
                         print(f'conflict with delta hedge: rhianna latest:{latest_direction} delta_hedge: {trade_coef}')
 
         conversions = 0
