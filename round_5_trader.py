@@ -183,7 +183,7 @@ class Trader:
             elif flow < 0:
                 # we only want the largest sell trade
                 sell_trade = [trade for trade in mkt_trade if trade.seller == 'Rhianna']
-                mkt_trade = [min(mkt_trade, key=lambda x: x.quantity)]
+                mkt_trade = [min(sell_trade, key=lambda x: x.quantity)]
             else:
                 # then its back to back trade, we ignore it
                 return empty_trade
@@ -1018,8 +1018,8 @@ class Trader:
         print(f"Delta is {delta}, previous delta is {previous_delta}")
         return orders_coupon, orders_coconut, ordered_position, estimated_traded_lob
 
-    def coconut_r_vwap_adaptor(self, traderDataNew):
-        trades = self.extract_from_cache(traderDataNew, 'COCONUT', 4)
+    def r_vwap_adaptor(self, traderDataNew, product):
+        trades = self.extract_from_cache(traderDataNew, product, 4)
         r_price, r_vol = [trade.price for trade in trades], [
             trade.quantity if trade.buyer == 'Rhianna' else -trade.quantity for trade in trades]
         print(f"r_price: {r_price}, r_vol: {r_vol}")
@@ -1043,8 +1043,8 @@ class Trader:
             r_vwap = 0
         return direction, r_vwap
 
-    def coconut_r_latest_adaptor(self, traderDataNew):
-        trades = self.extract_from_cache(traderDataNew, 'COCONUT', 4)
+    def r_latest_adaptor(self, traderDataNew, product):
+        trades = self.extract_from_cache(traderDataNew, product, 4)
         if trades[0].quantity == 0:
             # empty trade
             return 0, 0
@@ -1177,12 +1177,12 @@ class Trader:
                 buy_available_position_coconut, sell_available_position_coconut = self.cal_available_position(
                     product_list[0], state, ordered_position)
                 if len(traderDataNew) > 5:
-                    vwap_direction, r_vwap = self.coconut_r_vwap_adaptor(traderDataNew)
-                    latest_direction, vol = self.coconut_r_latest_adaptor(traderDataNew)
+                    vwap_direction, r_vwap = self.r_vwap_adaptor(traderDataNew, 'COCONUT')
+                    latest_direction, vol = self.r_latest_adaptor(traderDataNew,'COCONUT')
                     print(f'Rhianna direction: {vwap_direction}, r_vwap: {r_vwap}')
-                    if vwap_direction != trade_coef and vwap_direction+trade_coef != 0:
+                    if vwap_direction != trade_coef and vwap_direction*trade_coef != 0:
                         print(f'conflict with delta hedge: rhianna vwap:{vwap_direction} delta_hedge: {trade_coef}')
-                    if latest_direction != trade_coef and latest_direction+trade_coef != 0:
+                    if latest_direction != trade_coef and latest_direction*trade_coef != 0:
                         print(f'conflict with delta hedge: rhianna latest:{latest_direction} delta_hedge: {trade_coef}')
 
         conversions = 0
