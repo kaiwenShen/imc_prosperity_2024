@@ -851,7 +851,7 @@ class Trader:
                 order_coupon, buy_available_position_coupon, estimated_traded_lob, ordered_position = self.kevin_market_take(
                     product_list[1],
                     best_ask_coupon,
-                    int(round(best_ask_coupon_amount*0.5)),
+                    int(round(best_ask_coupon_amount)),
                     buy_available_position_coupon, 1,
                     ordered_position, estimated_traded_lob)
                 orders_coupon += order_coupon
@@ -899,7 +899,7 @@ class Trader:
                 order_coupon, sell_available_position_coupon, estimated_traded_lob, ordered_position = self.kevin_market_take(
                     product_list[1],
                     best_bid_coupon,
-                    int(round(best_bid_coupon_amount*0.5)),
+                    int(round(best_bid_coupon_amount)),
                     sell_available_position_coupon, -1,
                     ordered_position, estimated_traded_lob)
                 orders_coupon += order_coupon
@@ -1083,7 +1083,7 @@ class Trader:
                     predicted_iv = self.tongfei_predict_iv(ivs)
                 trade_coef = self.tongfei_calculate_fair_price(product, state, ordered_position, estimated_traded_lob,
                                                                coconut_mid_prices[0],
-                                                               predicted_iv=predicted_iv)
+                                                               predicted_iv=predicted_iv) # 1,-1,0 on coupon
                 product_list = ["COCONUT", "COCONUT_COUPON"]
                 orders_coupon, orders_coconut, ordered_position, estimated_traded_lob = self.tongfei_BS_trade(
                     product_list, state, ordered_position,
@@ -1091,5 +1091,9 @@ class Trader:
                     predicted_iv=predicted_iv, current_iv=ivs[0])
                 result[product_list[0]] = orders_coconut
                 result[product_list[1]] = orders_coupon
+                # follow Rihanna
+                buy_available_position_coconut, sell_available_position_coconut = self.cal_available_position(
+                    product_list[0], state, ordered_position)
+
         conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
