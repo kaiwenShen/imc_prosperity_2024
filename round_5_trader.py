@@ -84,8 +84,9 @@ class Trader:
 
     @staticmethod
     def update_estimated_position(estimated_position, product, amount, side):
+        estimated_position = copy.deepcopy(estimated_position)
         amount = side * abs(amount)
-        estimated_position[product] += amount
+        estimated_position[product] = estimated_position[product] + amount
         return estimated_position
 
     @staticmethod
@@ -188,6 +189,21 @@ class Trader:
                 # then its back to back trade, we ignore it
                 return empty_trade
         return mkt_trade[0]
+    def rose_buy_sell(self, rose_trade):
+        buyer = rose_trade.buyer
+        seller = rose_trade.seller
+
+        if buyer == 'Rhianna':
+            return 1
+        if seller == 'Rhianna':
+            return -1
+
+        return 0
+    def rhianna_position(self, state, coconut_r_trade, product, traderDataOld):
+        if state.timestamp == 0:
+            return 0
+        stored_pos = self.extract_from_cache(traderDataOld, product, -2)[0]
+        return stored_pos + coconut_r_trade.quantity if coconut_r_trade.buyer == 'Rhianna' else stored_pos - coconut_r_trade.quantity
 
     # we get multiple trade in this time slice. we aggregate multiple trade into one trade with the same timestamp
     def set_up_cached_trader_data(self, state, traderDataOld):
@@ -208,17 +224,27 @@ class Trader:
         coconut_implied_volatility = self.implied_volatility(coconut_midprice, K, r, coupon_midprice, T, 'call')
         coconut_delta = self.delta_call(coconut_midprice, K, r, coconut_implied_volatility, T)
         coconut_r_trade = self.rhianna_trade_record(state, 'COCONUT', traderDataOld)
+        r_pos = self.rhianna_position(state, coconut_r_trade, 'COCONUT', traderDataOld)
         gift_r_trade = self.rhianna_trade_record(state, 'GIFT_BASKET', traderDataOld)
         rose_r_trade = self.rhianna_trade_record(state, 'ROSES', traderDataOld)
+
+        buy_rose = 0
+
+        if self.rose_buy_sell(rose_r_trade) != 0:
+            buy_rose = self.rose_buy_sell(rose_r_trade)
+
+        if len(traderDataOld) > 0:
+            buy_rose = self.extract_from_cache(traderDataOld, 'ROSES', 0)[0]
         # cache formulation
         current_cache = [{'STARFRUIT': [star_midprice, star_standford_midprice, star_majority_vol, star_imbalance],
                           'ORCHIDS': [None, None, None, None, sunlight, humidity, importTariff, exportTariff,
                                       transportFees,
                                       orc_midprice, orc_standford_midprice, orc_majority_vol, orc_imbalance],
                           'COCONUT': [coconut_midprice, coconut_delta, coconut_implied_volatility, coupon_midprice,
-                                      coconut_r_trade],
+                                      r_pos, coconut_r_trade],
                           'GIFT_BASKET': [gift_r_trade],
-                          'ROSES': [rose_r_trade]
+                          'ROSES': [rose_r_trade],
+                          'Buy': [buy_rose]
                           }]
         # for ORCHIDS, the first four elements are for pure_arb price, conversion_cache, liquidity provide price, liquidity provide amount
         # for COCONUT and COCONUT_COUPON, the last element is for last time slice signal direction.
@@ -242,13 +268,15 @@ class Trader:
 
     def kevin_market_take(self, product, price, amount, available_amount, side, ordered_position, estimated_traded_lob):
         amount = abs(amount)
-        if available_amount == 0:
+        ordered_position = copy.deepcopy(ordered_position)
+        estimated_traded_lob = copy.deepcopy(estimated_traded_lob)
+        if available_amount == 0 or amount == 0:
             return [], available_amount, estimated_traded_lob, ordered_position
         if side == 1:
             # we buy the product
             if amount > available_amount:
                 amount = available_amount
-                estimated_traded_lob[product].sell_orders[price] += amount
+                estimated_traded_lob[product].sell_orders[price] = estimated_traded_lob[product].sell_orders[price] + amount
             else:
                 # we take the whole best ask
                 estimated_traded_lob[product].sell_orders.pop(price)
@@ -263,7 +291,7 @@ class Trader:
             # we sell the product
             if amount > available_amount:
                 amount = available_amount
-                estimated_traded_lob[product].buy_orders[price] -= amount
+                estimated_traded_lob[product].buy_orders[price] = estimated_traded_lob[product].buy_orders[price] - amount
             else:
                 # we take the whole best bid
                 estimated_traded_lob[product].buy_orders.pop(price)
@@ -273,6 +301,8 @@ class Trader:
             # sort by key from large to small
             estimated_traded_lob[product].buy_orders = dict(
                 sorted(estimated_traded_lob[product].buy_orders.items(), key=lambda x: x[0], reverse=True))
+            estimated_traded_lob[product].sell_orders = dict(
+                sorted(estimated_traded_lob[product].sell_orders.items(), key=lambda x: x[0]))
             return [Order(product, price, -amount)], available_amount, estimated_traded_lob, ordered_position
 
     def kevin_acceptable_price_wtb_liquidity_take(self, acceptable_price, product, state, ordered_position,
@@ -885,6 +915,8 @@ class Trader:
 
     def tongfei_BS_trade(self, product_list, state, ordered_position, estimated_traded_lob, trade_coef, previous_delta,
                          predicted_iv, current_iv):
+        ordered_position = copy.deepcopy(ordered_position)
+        estimated_traded_lob = copy.deepcopy(estimated_traded_lob)
         orders_coupon: List[Order] = []
         orders_coconut: List[Order] = []
         buy_available_position_coconut, sell_available_position_coconut = self.cal_available_position(product_list[0],
@@ -1025,7 +1057,8 @@ class Trader:
         return orders_coupon, orders_coconut, ordered_position, estimated_traded_lob
 
     def r_vwap_adaptor(self, traderDataNew, product):
-        trades = self.extract_from_cache(traderDataNew, product, 4)
+        trades = self.extract_from_cache(traderDataNew, product, -1)
+        pos = self.extract_from_cache(traderDataNew, product, -2)
         r_price, r_vol = [trade.price for trade in trades], [
             trade.quantity if trade.buyer == 'Rhianna' else -trade.quantity for trade in trades]
         print(f"r_price: {r_price}, r_vol: {r_vol}")
@@ -1047,14 +1080,15 @@ class Trader:
         else:
             # direction == 0
             r_vwap = 0
-        return direction, r_vwap, sum(vol_list)
+        return direction, r_vwap, pos[0]
 
     def r_latest_adaptor(self, traderDataNew, product):
-        trades = self.extract_from_cache(traderDataNew, product, 4)
+        trades = self.extract_from_cache(traderDataNew, product, -1)
+        pos = self.extract_from_cache(traderDataNew, product, -2)
         if trades[0].quantity == 0:
             # empty trade
-            return 0, 0
-        return trades[0].quantity if trades[0].buyer == 'Rhianna' else -trades[0].quantity, trades[0].price
+            return 0, 0, pos[0]
+        return trades[0].quantity if trades[0].buyer == 'Rhianna' else -trades[0].quantity, trades[0].price, pos[0]
 
     @staticmethod
     def exponential_halflife(length: int, half_life: int) -> np.ndarray:
@@ -1068,12 +1102,15 @@ class Trader:
         """
         return np.exp(-np.log(2) / half_life * np.arange(length))[::-1]
 
-    def mt_mm_following_rhianna(self, state, product, direction, price, quota, estimated_traded_lob, ordered_position):
+    def mt_mm_following_rhianna(self, state, product, direction, price, quota, estimated_traded_lob, ordered_position,r_pos):
         orders: List[Order] = []
         buy_available_position_coconut, sell_available_position_coconut = self.cal_available_position(
             product, state, ordered_position)
-        buy_available_position_coconut = min(buy_available_position_coconut, quota)
-        sell_available_position_coconut = min(sell_available_position_coconut, quota)
+        buy_available_position_coconut = int(min(buy_available_position_coconut, quota*(abs(r_pos)/10)))
+        sell_available_position_coconut = int(min(sell_available_position_coconut, quota*(abs(r_pos)/10)))
+        # buy_available_position_coconut = int(min(buy_available_position_coconut, quota))
+        # sell_available_position_coconut = int(min(sell_available_position_coconut, quota))
+        print(f"buy_available_position_coconut: {buy_available_position_coconut}, sell_available_position_coconut: {sell_available_position_coconut}")
         if direction == 1:
             # we follow rhianna to buy, but we only take the best ask if the best ask is less than or equal to the vwap
             for ask, ask_amount in list(estimated_traded_lob[product].sell_orders.items()):
@@ -1085,7 +1122,7 @@ class Trader:
                         ask_amount,
                         buy_available_position_coconut, 1,
                         ordered_position, estimated_traded_lob)
-                    print(f"Rhianna following BUY {product} {ask}x {-ask_amount}")
+                    print(f"Rhianna following BUY {product} {-ask_amount}x{ask}")
                     orders += order
         elif direction == -1:
             # we follow rhianna to sell, but we only sell the best bid if the best bid is greater than or equal to the vwap
@@ -1095,11 +1132,60 @@ class Trader:
                         product,
                         bid,
                         bid_amount,
-                        buy_available_position_coconut, -1,
+                        sell_available_position_coconut, -1,
                         ordered_position, estimated_traded_lob)
-                    print(f"Rhianna following SELL {product} {bid}x {bid_amount}")
+                    print(f"Rhianna following SELL {product} {bid_amount}x{bid}")
                     orders += order
         return orders, ordered_position, estimated_traded_lob
+
+    def rihana_order_follower(self, state, product, traderDataNew):
+        product_data_rihana = traderDataNew[0][product][0]
+        orders: List[Order] = []
+
+        buyer = product_data_rihana.buyer
+        seller = product_data_rihana.seller
+        price = product_data_rihana.price
+        quantity = product_data_rihana.quantity
+
+        existing_position = state.position[product] if product in state.position.keys() else 0
+        buy_available_position = self.POSITION_LIMIT[product] - existing_position
+        sell_available_position = self.POSITION_LIMIT[product] + existing_position
+
+        leverage = 3
+        range = [3, -3, 0]
+
+        buy_quantity = min(quantity, int(buy_available_position / leverage / len(range)))
+        sell_quantity = min(quantity, int(sell_available_position / leverage / len(range)))
+
+        if buyer == 'Rhianna':
+            for r in range:
+                orders += [Order(product, int(price) - r, buy_quantity * leverage)]
+        if seller == 'Rhianna':
+            for r in range:
+                orders += [Order(product, int(price) + r, -sell_quantity * leverage)]
+
+        return orders
+
+    def rose_trader(self, state, traderDataNew):
+        buy = self.extract_from_cache(traderDataNew, 'Buy', 0)[0]
+        orders: List[Order] = []
+
+        buy_price, buy_amount, sell_price, sell_amount = self.get_best_bid_ask('ROSES', state.order_depths)
+
+        existing_position = state.position['ROSES'] if 'ROSES' in state.position.keys() else 0
+        buy_available_position = self.POSITION_LIMIT['ROSES'] - existing_position
+        sell_available_position = self.POSITION_LIMIT['ROSES'] + existing_position
+
+        buy_quantity = min(abs(sell_amount), int(buy_available_position))
+        sell_quantity = min(abs(buy_amount), int(sell_available_position))
+
+        if buy == 1:
+            orders += [Order('ROSES', int(sell_price), buy_quantity)]
+        if buy == -1:
+            orders += [Order('ROSES', int(buy_price), -sell_quantity)]
+
+        return orders
+
 
     def run(self, state: TradingState):
         # read in the previous cache
@@ -1115,44 +1201,44 @@ class Trader:
         # Orders to be placed on exchange matching engine
         result = {}
         for product in state.order_depths.keys():
-            # if product == 'AMETHYSTS':
-            #     liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
-            #         10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
-            #     # result[product] = liquidity_take_order
-            #     mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
-            #                                                                                         state,
-            #                                                                                         ordered_position,
-            #                                                                                         estimated_traded_lob)
-            #     result[product] = liquidity_take_order + mm_order
-            #     # pnl = 3.5k
-            # #
-            # if product == 'STARFRUIT':
-            #     if len(traderDataNew) == NUM_OF_DATA_POINT:
-            #         # we have enough data to make prediction
-            #         predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
-            #         print(f"Predicted price: {predicted_price}")
-            #         # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
-            #         #                                                                                  ordered_position,
-            #         #                                                                                  estimated_traded_lob)
-            #         hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
-            #                                                                                   product, state,
-            #                                                                                   ordered_position,
-            #                                                                                   estimated_traded_lob,
-            #                                                                                   acceptable_range=2)
-            #         result[product] = hft_orders
-            # if product == 'ORCHIDS':
-            #     conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
-            #         product, state,
-            #         ordered_position,
-            #         estimated_traded_lob,
-            #         traderDataNew,
-            #         max_limit=5,
-            #         profit_margin=1
-            #     )
+            if product == 'AMETHYSTS':
+                liquidity_take_order, ordered_position, estimated_traded_lob = self.kevin_acceptable_price_wtb_liquidity_take(
+                    10_000, product, state, ordered_position, estimated_traded_lob, limit_to_keep=1)
+                # result[product] = liquidity_take_order
+                mm_order, ordered_position, estimated_traded_lob = self.kevin_residual_market_maker(10_000, product,
+                                                                                                    state,
+                                                                                                    ordered_position,
+                                                                                                    estimated_traded_lob)
+                result[product] = liquidity_take_order + mm_order
+                # pnl = 3.5k
             #
-            #     result[product] = arb_orders
-            #
-            #     print(f"conversions at this time slice: {conversions}")
+            if product == 'STARFRUIT':
+                if len(traderDataNew) == NUM_OF_DATA_POINT:
+                    # we have enough data to make prediction
+                    predicted_price = self.shaoqin_r1_starfruit_pred(traderDataNew)
+                    print(f"Predicted price: {predicted_price}")
+                    # cover_orders, ordered_position, estimated_traded_lob = self.kevin_cover_position(product, state,
+                    #                                                                                  ordered_position,
+                    #                                                                                  estimated_traded_lob)
+                    hft_orders, ordered_position, estimated_traded_lob = self.kevin_price_hft(predicted_price,
+                                                                                              product, state,
+                                                                                              ordered_position,
+                                                                                              estimated_traded_lob,
+                                                                                              acceptable_range=2)
+                    result[product] = hft_orders
+            if product == 'ORCHIDS':
+                conversions, arb_orders, ordered_position, estimated_traded_lob, traderDataNew = self.kevin_exchange_arb(
+                    product, state,
+                    ordered_position,
+                    estimated_traded_lob,
+                    traderDataNew,
+                    max_limit=5,
+                    profit_margin=1
+                )
+
+                result[product] = arb_orders
+
+                print(f"conversions at this time slice: {conversions}")
             # fair_price_deviation, fair_price = self.compute_basket_fair_price_deviation(state, 'GIFT_BASKET')
             # deviation_threshold = 30 / 2  # 25/2
             # if fair_price_deviation > deviation_threshold:
@@ -1198,6 +1284,16 @@ class Trader:
             #                                                                                predicted_basket_direction,
             #                                                                                trade_coef, )
             #     result[product] = orders
+            if product == 'GIFT_BASKET':
+                orders = self.rihana_order_follower(state, product, traderDataNew)
+                print(state.market_trades.get(product, []))
+                print(orders)
+                result[product] = orders
+            if product == 'ROSES':
+                orders = self.rose_trader(state, traderDataNew)
+                print('order:', orders)
+                print('position: ', state.position)
+                result[product] = orders
 
             if product == "COCONUT_COUPON":
                 deltas = self.extract_from_cache(traderDataNew, 'COCONUT',
@@ -1227,23 +1323,26 @@ class Trader:
                 # follow Rhianna COCONUT
                 if len(traderDataNew) > 5:
 
-                    vwap_direction, r_vwap,r_volume = self.r_vwap_adaptor(traderDataNew, 'COCONUT')
-                    latest_direction, r_price = self.r_latest_adaptor(traderDataNew,'COCONUT')
-                    # print(f'Rhianna direction: {vwap_direction}, r_vwap: {r_vwap}')
-                    print(f'Rhianna direction: {latest_direction}, r_vwap: {r_price}')
-                    rhianna_coconut_quota = 100
+                    vwap_direction, r_vwap, r_pos = self.r_vwap_adaptor(traderDataNew, 'COCONUT')
+                    # latest_direction, r_price, r_pos = self.r_latest_adaptor(traderDataNew, 'COCONUT')
+                    print(f'Rhianna direction: {vwap_direction}, r_vwap: {r_vwap}')
+                    # print(f'Rhianna direction: {latest_direction}, r_vwap: {r_price}')
+                    rhianna_coconut_quota = 300
+                    print(f'ordered_position: {ordered_position}')
                     orders_r_coconut, ordered_position, estimated_traded_lob = self.mt_mm_following_rhianna(state,
-                                                                                                            product_list[0],
+                                                                                                            product_list[
+                                                                                                                0],
                                                                                                             vwap_direction,
                                                                                                             r_vwap,
                                                                                                             rhianna_coconut_quota,
                                                                                                             estimated_traded_lob,
-                                                                                                            ordered_position)
+                                                                                                            ordered_position,
+                                                                                                            r_pos)
                     if vwap_direction != trade_coef and vwap_direction * trade_coef != 0:
                         print(
                             f'conflict with delta hedge: rhianna vwap:{vwap_direction} delta_hedge: {trade_coef}, we omit the delta hedge')
                         result[product_list[0]] = orders_r_coconut
                     else:
                         result[product_list[0]] += orders_r_coconut
-        conversions = 0
+        # conversions = 0
         return result, conversions, jsonpickle.encode(traderDataNew)
