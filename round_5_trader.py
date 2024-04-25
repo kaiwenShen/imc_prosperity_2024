@@ -1047,7 +1047,7 @@ class Trader:
         else:
             # direction == 0
             r_vwap = 0
-        return direction, r_vwap
+        return direction, r_vwap, sum(vol_list)
 
     def r_latest_adaptor(self, traderDataNew, product):
         trades = self.extract_from_cache(traderDataNew, product, 4)
@@ -1076,52 +1076,29 @@ class Trader:
         sell_available_position_coconut = min(sell_available_position_coconut, quota)
         if direction == 1:
             # we follow rhianna to buy, but we only take the best ask if the best ask is less than or equal to the vwap
-            if buy_available_position_coconut > 0:
-                best_bid, _, best_ask, best_ask_amount = self.get_best_bid_ask(product,
-                                                                               estimated_traded_lob)
-                if best_ask <= price:
+            for ask, ask_amount in list(estimated_traded_lob[product].sell_orders.items()):
+                if ask <= price and buy_available_position_coconut > 0:
                     # we market take the best ask
                     order, buy_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
                         product,
-                        best_ask,
-                        best_ask_amount,
+                        ask,
+                        ask_amount,
                         buy_available_position_coconut, 1,
                         ordered_position, estimated_traded_lob)
-                    print(f"Rhianna following BUY {product} {best_ask}x {best_ask_amount}")
+                    print(f"Rhianna following BUY {product} {ask}x {-ask_amount}")
                     orders += order
-                elif best_bid < price:
-                    # we market make at best bid+1
-                    order = Order(product, best_bid + 1, buy_available_position_coconut)
-                    orders += [order]
-                    print(
-                        f"Rhianna following LIMIT BUY {product} {best_bid + 1}x {buy_available_position_coconut}")
-                    estimated_traded_lob[product].buy_orders[best_bid + 1] = buy_available_position_coconut
-                    ordered_position = self.update_estimated_position(ordered_position, product,
-                                                                      buy_available_position_coconut, 1)
         elif direction == -1:
             # we follow rhianna to sell, but we only sell the best bid if the best bid is greater than or equal to the vwap
-            if sell_available_position_coconut > 0:
-                best_bid, best_bid_amount, best_ask, _ = self.get_best_bid_ask(product,
-                                                                               estimated_traded_lob)
-                if best_bid >= price:
-                    # we market take the best bid
+            for bid, bid_amount in list(estimated_traded_lob[product].buy_orders.items()):
+                if bid >= price and sell_available_position_coconut > 0:
                     order, sell_available_position_coconut, estimated_traded_lob, ordered_position = self.kevin_market_take(
                         product,
-                        best_bid,
-                        best_bid_amount,
-                        sell_available_position_coconut, -1,
+                        bid,
+                        bid_amount,
+                        buy_available_position_coconut, -1,
                         ordered_position, estimated_traded_lob)
-                    print(f"Rhianna following SELL {product} {best_bid}x {best_bid_amount}")
+                    print(f"Rhianna following SELL {product} {bid}x {bid_amount}")
                     orders += order
-                elif best_ask > price:
-                    # we market make at best ask-1
-                    order = Order(product, best_ask - 1, sell_available_position_coconut)
-                    orders += [order]
-                    print(
-                        f"Rhianna following LIMIT SELL {product} {best_ask - 1}x {sell_available_position_coconut}")
-                    estimated_traded_lob[product].sell_orders[best_ask - 1] = sell_available_position_coconut
-                    ordered_position = self.update_estimated_position(ordered_position, product,
-                                                                      sell_available_position_coconut, -1)
         return orders, ordered_position, estimated_traded_lob
 
     def run(self, state: TradingState):
@@ -1250,9 +1227,10 @@ class Trader:
                 # follow Rhianna COCONUT
                 if len(traderDataNew) > 5:
 
-                    vwap_direction, r_vwap = self.r_vwap_adaptor(traderDataNew, 'COCONUT')
-                    # latest_direction, r_price = self.r_latest_adaptor(traderDataNew,'COCONUT')
-                    print(f'Rhianna direction: {vwap_direction}, r_vwap: {r_vwap}')
+                    vwap_direction, r_vwap,r_volume = self.r_vwap_adaptor(traderDataNew, 'COCONUT')
+                    latest_direction, r_price = self.r_latest_adaptor(traderDataNew,'COCONUT')
+                    # print(f'Rhianna direction: {vwap_direction}, r_vwap: {r_vwap}')
+                    print(f'Rhianna direction: {latest_direction}, r_vwap: {r_price}')
                     rhianna_coconut_quota = 100
                     orders_r_coconut, ordered_position, estimated_traded_lob = self.mt_mm_following_rhianna(state,
                                                                                                             product_list[0],
